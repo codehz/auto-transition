@@ -1,0 +1,44 @@
+{
+  "name": "@codehz/auto-transition",
+  "version": "0.0.1",
+  "description": "A lightweight React component for automatic enter/exit/move transitions using Web Animations API",
+  "license": "MIT",
+  "author": "codehz",
+  "module": "dist/index.mjs",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.7",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "prettier": "^3.7.4",
+    "publint": "^0.3.16",
+    "tsdown": "^0.18.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.50.1"
+  },
+  "peerDependencies": {
+    "react": "^19.2.3"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.2.4"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "prepare": "bunx tsdown --sourcemap --publint",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  }
+}
