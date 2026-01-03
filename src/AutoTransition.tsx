@@ -2,8 +2,10 @@ import { Slot } from "@radix-ui/react-slot";
 import {
   useEffect,
   useRef,
+  type ComponentProps,
   type ComponentPropsWithoutRef,
   type ElementType,
+  type FC,
   type ForwardedRef,
   type ReactElement,
   type ReactNode,
@@ -44,7 +46,7 @@ type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   ref?: ForwardedRef<HTMLElement>;
 };
 
-type AutoTransitionProps<T extends ElementType | undefined> = T extends ElementType
+export type AutoTransitionProps<T extends ElementType | undefined> = T extends ElementType
   ? AutoTransitionBaseProps<T> &
       Omit<ComponentPropsWithoutRef<T>, keyof AutoTransitionBaseProps<T>> & {
         children?: ReactNode;
@@ -279,3 +281,34 @@ export type TransitionPlugin = {
   /** Play when element is resized; not invoked by current implementation. */
   resize?(el: Element, current: Dimensions, previous: Dimensions): Animation;
 };
+
+/**
+ * A higher-order component that wraps a component with `AutoTransition`.
+ *
+ * @template T - Element type of the component to wrap.
+ * @param Component - The component to wrap.
+ * @param options - Default props to pass to `AutoTransition`.
+ * @returns A new component that automatically applies transitions.
+ */
+export function withAutoTransition<T extends ElementType, R extends ElementType>(
+  Component: T,
+  options?: Omit<AutoTransitionProps<R>, "children">,
+): FC<ComponentProps<T>> {
+  const WithAutoTransition = (props: ComponentProps<T>) => {
+    return (
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <AutoTransition {...(options as any)}>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        <Component {...(props as any)} />
+      </AutoTransition>
+    );
+  };
+  const componentName =
+    typeof Component === "string"
+      ? Component
+      : (Component as { displayName?: string; name?: string }).displayName ||
+        (Component as { displayName?: string; name?: string }).name ||
+        "Component";
+  WithAutoTransition.displayName = `withAutoTransition(${componentName})`;
+  return WithAutoTransition;
+}
