@@ -6,6 +6,10 @@
   "author": "codehz",
   "module": "dist/index.mjs",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codehz/auto-transition"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^19.2.7",
