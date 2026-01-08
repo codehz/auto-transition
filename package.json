@@ -52,8 +52,14 @@
     ]
   },
   "scripts": {
-    "prepare": "bunx tsdown --sourcemap --publint && bunx husky",
+    "prepare": "bunx husky",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build": "bunx tsdown --sourcemap --publint"
+  },
+  "tsdown": {
+    "outputOptions": {
+      "banner": "\"use client\";"
+    }
   }
 }
