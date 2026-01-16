@@ -12,6 +12,7 @@ import {
 } from "react";
 import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
+import { patchActivity } from "./ActivityPatch.tsx";
 
 /**
  * A rectangle describing an element's position and size relative to the measured
@@ -43,6 +44,7 @@ export type Dimensions = {
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
   transition?: TransitionPlugin;
+  patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
 };
 
@@ -97,6 +99,7 @@ export function AutoTransition<T extends ElementType | undefined>({
   children,
   transition,
   ref: externalRef,
+  patch,
   ...rest
 }: AutoTransitionProps<T>) {
   const Component = as ?? Slot;
@@ -104,6 +107,9 @@ export function AutoTransition<T extends ElementType | undefined>({
   useEffect(() => {
     const removed = new Set<Element>();
     const target = ref.current!;
+    if (patch) {
+      patchActivity(target);
+    }
     let measureTarget = target;
     let styles = getComputedStyle(measureTarget);
     while (styles.display === "contents" || (styles.position === "static" && measureTarget !== document.body)) {
@@ -248,7 +254,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         height: rect.height,
       };
     }
-  }, [transition]);
+  }, [patch, transition]);
   const forkedRef = useForkRef(ref, externalRef);
   return (
     <Component ref={forkedRef} {...rest}>
