@@ -9,7 +9,7 @@
 - **全自动动画**：自动识别子元素的添加、删除和位置变化并应用动画。
 - **高性能**：基于原生 Web Animations API 实现，确保流畅的 160fps 体验。
 - **布局感知**：自动计算元素在容器内的相对位置，支持平滑的位移和缩放过渡。
-- **锚点感知**：可显式指定 `anchor`，让右侧/底部悬浮容器中的动画仍然自然贴边。
+- **锚点感知**：可显式指定 `anchor`，让右侧/底部悬浮容器中的移动和退出动画仍然自然贴边。
 - **高度可定制**：支持通过插件系统自定义动画效果。
 - **无侵入性**：支持通过 `Slot` 将行为附着到现有布局节点。
 
@@ -76,7 +76,7 @@ function FloatingActions({ actions }: { actions: string[] }) {
 | 属性         | 类型                                                           | 默认值       | 说明                                                                    |
 | :----------- | :------------------------------------------------------------- | :----------- | :---------------------------------------------------------------------- |
 | `as`         | `ElementType`                                                  | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。       |
-| `anchor`     | `"top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | `top-left`   | 控制内置动画围绕哪个角做位移、缩放和退出定位。                          |
+| `anchor`     | `"top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | `top-left`   | 控制内置动画的位移补偿和退出定位。                                      |
 | `transition` | `TransitionPlugin`                                             | 内置默认动画 | 用于自定义进入、退出和移动动画的插件对象。                              |
 | `patch`      | `boolean`                                                      | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。 |
 | `children`   | `ReactNode`                                                    | -            | 需要应用动画的子元素。                                                  |
@@ -99,9 +99,9 @@ export type TransitionPlugin = {
 
 ### 默认动画行为
 
-- **Enter**: 围绕 `anchor` 做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 按 `anchor` 冻结元素的绝对定位，做轻微 anchored scale + fade-out，动画结束后从 DOM 移除 (250ms ease-in)。
-- **Move**: 使用锚点感知 FLIP，位移和缩放都围绕声明的角进行补偿 (250ms ease-in)。
+- **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
+- **Exit**: 按 `anchor` 冻结元素的绝对定位，做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
+- **Move**: 使用锚点感知 FLIP，通过基于 `anchor` 的位移补偿配合缩放过渡 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置锚点动画执行。
 
