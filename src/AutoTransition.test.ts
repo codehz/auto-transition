@@ -116,7 +116,7 @@ describe("TransitionPlugin contexts", () => {
 });
 
 describe("defaultEnterTransition", () => {
-  test("keeps the previous fade-scale output", () => {
+  test("uses fade-only output by default", () => {
     const { animatedElement, calls } = createAnimatedElement();
 
     defaultEnterTransition(buildEnterContext(animatedElement, currentRect, parent));
@@ -124,15 +124,13 @@ describe("defaultEnterTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual({
       opacity: [0, 1],
-      transformOrigin: ["50% 50%", "50% 50%"],
-      transform: ["scale(0.96, 0.96)", "scale(1, 1)"],
     });
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-out" });
   });
 });
 
 describe("defaultExitTransition", () => {
-  test("keeps the previous transform output when no anchor compensation is needed", () => {
+  test("uses fade-only output when no anchor compensation is needed", () => {
     const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
     const animatedElement = {
       animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
@@ -148,8 +146,6 @@ describe("defaultExitTransition", () => {
       {
         position: "absolute",
         opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "scale(1, 1)",
         width: "120px",
         height: "50px",
         margin: "0",
@@ -159,8 +155,6 @@ describe("defaultExitTransition", () => {
       {
         position: "absolute",
         opacity: 0,
-        transformOrigin: "50% 50%",
-        transform: "scale(0.96, 0.96)",
         width: "120px",
         height: "50px",
         margin: "0",
@@ -188,8 +182,8 @@ describe("defaultExitTransition", () => {
     );
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes[0]?.transform).toBe("translate(48px, 36px) scale(1, 1)");
-    expect(calls[0]?.keyframes[1]?.transform).toBe("translate(48px, 36px) scale(0.96, 0.96)");
+    expect(calls[0]?.keyframes[0]?.transform).toBe("translate(48px, 36px)");
+    expect(calls[0]?.keyframes[1]?.transform).toBe("translate(48px, 36px)");
   });
 });
 
@@ -269,8 +263,6 @@ describe("defineTransition", () => {
     expect(calls[0]).toEqual({
       keyframes: {
         opacity: [0, 1],
-        transformOrigin: ["50% 50%", "50% 50%"],
-        transform: ["scale(1, 1)", "scale(1, 1)"],
       },
       options: { duration: 180, easing: "ease-out" },
     });

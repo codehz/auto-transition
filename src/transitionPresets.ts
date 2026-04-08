@@ -184,8 +184,7 @@ function absoluteKeyframeBase(
   return {
     position: "absolute",
     opacity,
-    transformOrigin,
-    transform,
+    ...(transform ? { transformOrigin, transform } : {}),
     width: `${rect.width}px`,
     height: `${rect.height}px`,
     margin: "0",
@@ -224,6 +223,32 @@ function createEnterFadeScale({
   };
 }
 
+function createEnterFade({
+  duration = 250,
+  easing = "ease-out",
+  fromOpacity = 0,
+  toOpacity = 1,
+  fromTranslate,
+  toTranslate,
+  transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
+}: EnterFadeOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
+  const fromTransform = buildTransform({ translate: fromTranslate });
+  const toTransform = buildTransform({ translate: toTranslate });
+  const keyframes: PropertyIndexedKeyframes = {
+    opacity: [fromOpacity, toOpacity],
+  };
+
+  if (fromTransform || toTransform) {
+    keyframes.transformOrigin = [transformOrigin, transformOrigin];
+    keyframes.transform = [fromTransform, toTransform];
+  }
+
+  return {
+    keyframes,
+    options: { duration, easing },
+  };
+}
+
 function createExitAbsoluteFadeScale({
   duration = 250,
   easing = "ease-in",
@@ -256,6 +281,32 @@ function createExitAbsoluteFadeScale({
             translate,
             scale: toScale(endScale, 1),
           }),
+        },
+      ];
+    },
+    options: { duration, easing },
+  };
+}
+
+function createExitAbsoluteFade({
+  duration = 250,
+  easing = "ease-in",
+  fromOpacity = 1,
+  toOpacity = 0,
+  includeAnchorDelta = true,
+  transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
+}: ExitAbsoluteFadeOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
+  return {
+    keyframes: ({ rect, anchorDelta }) => {
+      const translate = includeAnchorDelta ? anchorDelta : undefined;
+      const transform = buildTransform({ translate });
+      const startKeyframe = absoluteKeyframeBase(rect, fromOpacity, transformOrigin, transform);
+
+      return [
+        startKeyframe,
+        {
+          ...startKeyframe,
+          opacity: toOpacity,
         },
       ];
     },
@@ -320,11 +371,7 @@ export const transitionPresets = {
       return createEnterFadeScale(options);
     },
     fade(options: EnterFadeOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
-      return createEnterFadeScale({
-        ...options,
-        fromScale: 1,
-        endScale: 1,
-      });
+      return createEnterFade(options);
     },
     slideFade({
       axis = "y",
@@ -379,11 +426,7 @@ export const transitionPresets = {
       return createExitAbsoluteFadeScale(options);
     },
     absoluteFade(options: ExitAbsoluteFadeOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
-      return createExitAbsoluteFadeScale({
-        ...options,
-        fromScale: 1,
-        endScale: 1,
-      });
+      return createExitAbsoluteFade(options);
     },
     absoluteSlideFade({
       axis = "y",
@@ -457,8 +500,8 @@ export const transitionPresets = {
 } as const;
 
 const defaultTransition = defineTransition({
-  enter: transitionPresets.enter.fadeScale(),
-  exit: transitionPresets.exit.absoluteFadeScale(),
+  enter: transitionPresets.enter.fade(),
+  exit: transitionPresets.exit.absoluteFade(),
   move: transitionPresets.move.flip(),
 });
 

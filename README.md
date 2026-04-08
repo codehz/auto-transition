@@ -125,6 +125,7 @@ function Example({ children }: { children: React.ReactNode }) {
 其中：
 
 - `enter.fade()` 只做透明度过渡，适合不希望缩放或位移的内容。
+- 默认内置 `enter` / `exit` 分别使用 `transitionPresets.enter.fade()` 和 `transitionPresets.exit.absoluteFade()`，不会附带缩放。
 - `enter.slideFade()` / `exit.absoluteSlideFade()` 支持通过 `axis`、`direction`、`distance` 快速做方向性滑入滑出。
 - `enter.pop()` 会带一个轻微 overshoot keyframe，适合按钮、标签、浮层等强调进入感的元素。
 - `exit.absoluteFadeScale()` 会自动处理退出元素的绝对定位 keyframes，并默认合并 `anchorDelta`。

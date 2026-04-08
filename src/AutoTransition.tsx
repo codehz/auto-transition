@@ -190,6 +190,10 @@ function restoreLockedNode(node: Element, lockedStyles: LockedStyleState) {
  *  - exit: keep element size and position while fading out, 250ms ease-in
  *  - move: translate + scale from previous rect to new rect, 250ms ease-in
  *
+ * The default enter/exit animations do not apply scale. If you want the
+ * previous fade-scale behavior, use `transitionPresets.enter.fadeScale()`
+ * and `transitionPresets.exit.absoluteFadeScale()`.
+ *
  * Notes:
  *  - This component is client-only (relies on DOM measurement & Web Animations API).
  *  - It only animates `Element` nodes; text nodes use native DOM operations.
