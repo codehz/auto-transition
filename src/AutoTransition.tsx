@@ -10,20 +10,9 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import {
-  getExitInsets,
-  getMoveGeometry,
-  type Anchor,
-  type AnchorPoint,
-  type ExitInsets,
-  type MoveGeometry,
-  type ParentBounds,
-} from "./anchor.ts";
 import { patchActivity } from "./ActivityPatch.tsx";
 import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
-
-export type { Anchor, AnchorPoint, ExitInsets, MoveGeometry, ParentBounds } from "./anchor.ts";
 
 /**
  * A rectangle describing an element's position and size relative to the measured
@@ -47,9 +36,26 @@ export type Dimensions = {
   height: number;
 };
 
+export type Point = {
+  x: number;
+  y: number;
+};
+
+export type ParentBounds = {
+  width: number;
+  height: number;
+};
+
+export type MoveGeometry = {
+  delta: Point;
+  scale: {
+    x: number;
+    y: number;
+  };
+};
+
 export type TransitionBaseContext = {
   element: Element;
-  anchor: Anchor;
   parent: ParentBounds;
 };
 
@@ -59,13 +65,12 @@ export type EnterTransitionContext = TransitionBaseContext & {
 
 export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
-  insets: ExitInsets;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
   current: Rect;
   previous: Rect;
-  delta: AnchorPoint;
+  delta: Point;
   scale: MoveGeometry["scale"];
 };
 
@@ -89,7 +94,6 @@ type MeasuredParentRect = ParentBounds & {
  */
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
-  anchor?: Anchor;
   transition?: TransitionPlugin;
   patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
@@ -104,46 +108,45 @@ export type AutoTransitionProps<T extends ElementType | undefined> = T extends E
       children: ReactElement;
     };
 
-export function buildEnterContext(
-  element: Element,
-  rect: Rect,
-  anchor: Anchor,
-  parent: ParentBounds,
-): EnterTransitionContext {
-  return { element, rect, anchor, parent };
+export function buildEnterContext(element: Element, rect: Rect, parent: ParentBounds): EnterTransitionContext {
+  return { element, rect, parent };
 }
 
-export function buildExitContext(
-  element: Element,
-  rect: Rect,
-  anchor: Anchor,
-  parent: ParentBounds,
-): ExitTransitionContext {
-  return {
-    element,
-    rect,
-    anchor,
-    parent,
-    insets: getExitInsets(rect, parent, anchor),
-  };
+export function buildExitContext(element: Element, rect: Rect, parent: ParentBounds): ExitTransitionContext {
+  return { element, rect, parent };
 }
 
 export function buildMoveContext(
   element: Element,
   current: Rect,
   previous: Rect,
-  anchor: Anchor,
   parent: ParentBounds,
 ): MoveTransitionContext {
-  const geometry = getMoveGeometry(current, previous, anchor);
+  const geometry = getMoveGeometry(current, previous);
   return {
     element,
-    anchor,
     parent,
     current,
     previous,
     delta: geometry.delta,
     scale: geometry.scale,
+  };
+}
+
+export function getScaleFactor(previous: number, current: number): number {
+  return current === 0 ? 1 : previous / current;
+}
+
+export function getMoveGeometry(current: Rect, previous: Rect): MoveGeometry {
+  return {
+    delta: {
+      x: previous.x - current.x,
+      y: previous.y - current.y,
+    },
+    scale: {
+      x: getScaleFactor(previous.width, current.width),
+      y: getScaleFactor(previous.height, current.height),
+    },
   };
 }
 
@@ -158,7 +161,7 @@ export function defaultEnterTransition({ element }: EnterTransitionContext): Ani
   );
 }
 
-export function defaultExitTransition({ element, rect, insets }: ExitTransitionContext): Animation {
+export function defaultExitTransition({ element, rect }: ExitTransitionContext): Animation {
   const width = `${rect.width}px`;
   const height = `${rect.height}px`;
   const startKeyframe: Keyframe = {
@@ -169,19 +172,9 @@ export function defaultExitTransition({ element, rect, insets }: ExitTransitionC
     width,
     height,
     margin: "0",
+    top: `${rect.y}px`,
+    left: `${rect.x}px`,
   };
-  if (insets.top !== undefined) {
-    startKeyframe.top = `${insets.top}px`;
-  }
-  if (insets.right !== undefined) {
-    startKeyframe.right = `${insets.right}px`;
-  }
-  if (insets.bottom !== undefined) {
-    startKeyframe.bottom = `${insets.bottom}px`;
-  }
-  if (insets.left !== undefined) {
-    startKeyframe.left = `${insets.left}px`;
-  }
   const endKeyframe: Keyframe = {
     ...startKeyframe,
     opacity: 0,
@@ -193,7 +186,7 @@ export function defaultExitTransition({ element, rect, insets }: ExitTransitionC
 export function defaultMoveTransition({ element, delta, scale }: MoveTransitionContext): Animation {
   return element.animate(
     {
-      transformOrigin: [DEFAULT_TRANSFORM_ORIGIN, DEFAULT_TRANSFORM_ORIGIN],
+      transformOrigin: ["0 0", "0 0"],
       transform: [`translate(${delta.x}px, ${delta.y}px) scale(${scale.x}, ${scale.y})`, "translate(0, 0) scale(1, 1)"],
     },
     { duration: 250, easing: "ease-in" },
@@ -246,7 +239,6 @@ function toParentBounds(parent: MeasuredParentRect): ParentBounds {
  */
 export function AutoTransition<T extends ElementType | undefined>({
   as,
-  anchor = "top-left",
   children,
   transition,
   ref: externalRef,
@@ -355,7 +347,7 @@ export function AutoTransition<T extends ElementType | undefined>({
     };
 
     function animateNodeExit(node: Element, rect: Rect, parent: MeasuredParentRect) {
-      const context = buildExitContext(node, rect, anchor, toParentBounds(parent));
+      const context = buildExitContext(node, rect, toParentBounds(parent));
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
       animation.finished.then(() => node.remove());
       return animation;
@@ -364,12 +356,12 @@ export function AutoTransition<T extends ElementType | undefined>({
     function animateNodeEnter(node: Element) {
       const parent = parentRect();
       const rect = getRelativePosition(node, parent);
-      const context = buildEnterContext(node, rect, anchor, toParentBounds(parent));
+      const context = buildEnterContext(node, rect, toParentBounds(parent));
       return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
     }
 
     function animateNodeMove(node: Element, rect: Rect, oldRect: Rect, parent: MeasuredParentRect) {
-      const context = buildMoveContext(node, rect, oldRect, anchor, toParentBounds(parent));
+      const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent));
       return transition?.move ? transition.move(context) : defaultMoveTransition(context);
     }
 
@@ -382,7 +374,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         height: rect.height,
       };
     }
-  }, [anchor, patch, transition]);
+  }, [patch, transition]);
 
   const forkedRef = useForkRef(ref, externalRef);
   return (
