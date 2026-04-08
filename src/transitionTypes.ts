@@ -89,16 +89,6 @@ export type CompiledTransitionPlugin = {
   move?: TransitionPhaseHandler<MoveTransitionContext>;
 };
 
-export type TransitionRecipe = {
-  enter?: TransitionPhaseRecipe<EnterTransitionContext>;
-  exit?: TransitionPhaseRecipe<ExitTransitionContext>;
-  move?: TransitionPhaseRecipe<MoveTransitionContext>;
-};
-
-export type TransitionDefinition = TransitionPlugin;
-
-export type TransitionLike = TransitionPlugin;
-
 export function buildEnterContext(element: Element, rect: Rect, parent: ParentBounds): EnterTransitionContext {
   return { element, rect, parent };
 }

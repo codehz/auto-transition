@@ -46,13 +46,10 @@ export {
   type Rect,
   type TransitionBaseContext,
   type TransitionKeyframes,
-  type TransitionDefinition,
-  type TransitionLike,
   type TransitionPhaseHandler,
   type TransitionPhaseLike,
   type TransitionPhaseRecipe,
   type TransitionPlugin,
-  type TransitionRecipe,
   type TransitionTiming,
 } from "./transitionTypes.ts";
 export {

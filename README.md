@@ -167,18 +167,6 @@ type TransitionPlugin = {
 };
 ```
 
-为了兼容旧代码，`TransitionLike` 和 `TransitionDefinition` 仍然保留为 `TransitionPlugin` 的类型别名。
-
-如果你希望整个对象都保持声明式，也仍然可以继续使用 `TransitionRecipe`：
-
-```ts
-type TransitionRecipe = {
-  enter?: TransitionPhaseRecipe<EnterTransitionContext>;
-  exit?: TransitionPhaseRecipe<ExitTransitionContext>;
-  move?: TransitionPhaseRecipe<MoveTransitionContext>;
-};
-```
-
 ### 兼容写法：纯函数式 `TransitionPlugin`
 
 如果你需要完全控制 `Animation` 对象，旧版函数式插件接口仍然完全可用：
