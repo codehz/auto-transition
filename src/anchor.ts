@@ -12,14 +12,9 @@ export type AnchorPoint = {
   y: number;
 };
 
-export type ExitInsets = {
-  top?: number;
-  right?: number;
-  bottom?: number;
-  left?: number;
-};
-
 export type ParentBounds = {
+  x: number;
+  y: number;
   width: number;
   height: number;
 };
@@ -76,15 +71,5 @@ export function getMoveGeometry(current: Rect, previous: Rect, anchor: Anchor): 
       x: getScaleFactor(previous.width, current.width),
       y: getScaleFactor(previous.height, current.height),
     },
-  };
-}
-
-export function getExitInsets(rect: Rect, parent: ParentBounds, anchor: Anchor): ExitInsets {
-  const geometry = resolveAnchor(anchor);
-  return {
-    top: geometry.y === "top" ? rect.y : undefined,
-    right: geometry.x === "right" ? parent.width - rect.x - rect.width : undefined,
-    bottom: geometry.y === "bottom" ? parent.height - rect.y - rect.height : undefined,
-    left: geometry.x === "left" ? rect.x : undefined,
   };
 }

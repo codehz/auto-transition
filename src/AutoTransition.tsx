@@ -10,26 +10,17 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import {
-  getExitInsets,
-  getMoveGeometry,
-  type Anchor,
-  type AnchorPoint,
-  type ExitInsets,
-  type MoveGeometry,
-  type ParentBounds,
-} from "./anchor.ts";
+import { getMoveGeometry, type Anchor, type AnchorPoint, type MoveGeometry, type ParentBounds } from "./anchor.ts";
 import { patchActivity } from "./ActivityPatch.tsx";
 import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
 
-export type { Anchor, AnchorPoint, ExitInsets, MoveGeometry, ParentBounds } from "./anchor.ts";
+export type { Anchor, AnchorPoint, MoveGeometry, ParentBounds } from "./anchor.ts";
 
 /**
- * A rectangle describing an element's position and size relative to the measured
- * parent used by `AutoTransition` for layout calculations.
+ * A rectangle describing an element's position and size in viewport coordinates.
  *
- * - `x`/`y` are the left/top offsets relative to the measurement parent's content box.
+ * - `x`/`y` are the left/top offsets relative to the viewport.
  * - `width`/`height` are the element's layout size in pixels.
  */
 export type Rect = {
@@ -59,12 +50,13 @@ export type EnterTransitionContext = TransitionBaseContext & {
 
 export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
-  insets: ExitInsets;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
   current: Rect;
   previous: Rect;
+  currentParent: ParentBounds;
+  previousParent: ParentBounds;
   delta: AnchorPoint;
   scale: MoveGeometry["scale"];
 };
@@ -77,9 +69,9 @@ export type TransitionPlugin = {
 
 const DEFAULT_TRANSFORM_ORIGIN = "50% 50%";
 
-type MeasuredParentRect = ParentBounds & {
-  left: number;
-  top: number;
+type ElementSnapshot = {
+  rect: Rect;
+  parent: ParentBounds;
 };
 
 /**
@@ -119,13 +111,7 @@ export function buildExitContext(
   anchor: Anchor,
   parent: ParentBounds,
 ): ExitTransitionContext {
-  return {
-    element,
-    rect,
-    anchor,
-    parent,
-    insets: getExitInsets(rect, parent, anchor),
-  };
+  return { element, rect, anchor, parent };
 }
 
 export function buildMoveContext(
@@ -133,15 +119,18 @@ export function buildMoveContext(
   current: Rect,
   previous: Rect,
   anchor: Anchor,
-  parent: ParentBounds,
+  currentParent: ParentBounds,
+  previousParent: ParentBounds = currentParent,
 ): MoveTransitionContext {
   const geometry = getMoveGeometry(current, previous, anchor);
   return {
     element,
     anchor,
-    parent,
+    parent: currentParent,
     current,
     previous,
+    currentParent,
+    previousParent,
     delta: geometry.delta,
     scale: geometry.scale,
   };
@@ -158,11 +147,13 @@ export function defaultEnterTransition({ element }: EnterTransitionContext): Ani
   );
 }
 
-export function defaultExitTransition({ element, rect, insets }: ExitTransitionContext): Animation {
+export function defaultExitTransition({ element, rect }: ExitTransitionContext): Animation {
   const width = `${rect.width}px`;
   const height = `${rect.height}px`;
   const startKeyframe: Keyframe = {
-    position: "absolute",
+    position: "fixed",
+    top: `${rect.y}px`,
+    left: `${rect.x}px`,
     opacity: 1,
     transformOrigin: DEFAULT_TRANSFORM_ORIGIN,
     transform: "scale(1, 1)",
@@ -170,18 +161,6 @@ export function defaultExitTransition({ element, rect, insets }: ExitTransitionC
     height,
     margin: "0",
   };
-  if (insets.top !== undefined) {
-    startKeyframe.top = `${insets.top}px`;
-  }
-  if (insets.right !== undefined) {
-    startKeyframe.right = `${insets.right}px`;
-  }
-  if (insets.bottom !== undefined) {
-    startKeyframe.bottom = `${insets.bottom}px`;
-  }
-  if (insets.left !== undefined) {
-    startKeyframe.left = `${insets.left}px`;
-  }
   const endKeyframe: Keyframe = {
     ...startKeyframe,
     opacity: 0,
@@ -200,13 +179,6 @@ export function defaultMoveTransition({ element, delta, scale }: MoveTransitionC
   );
 }
 
-function toParentBounds(parent: MeasuredParentRect): ParentBounds {
-  return {
-    width: parent.width,
-    height: parent.height,
-  };
-}
-
 /**
  * AutoTransition
  *
@@ -219,8 +191,8 @@ function toParentBounds(parent: MeasuredParentRect): ParentBounds {
  * If a `transition` plugin is not provided, AutoTransition applies its
  * default animations:
  *  - enter: fade in (opacity 0 -> 1), 250ms ease-out
- *  - exit: keep element size and position while fading out, 250ms ease-in
- *  - move: translate + scale from previous rect to new rect, 250ms ease-in
+ *  - exit: freeze element at its previous viewport position while fading out, 250ms ease-in
+ *  - move: translate + scale from previous viewport rect to new viewport rect, 250ms ease-in
  *
  * Notes:
  *  - This component is client-only (relies on DOM measurement & Web Animations API).
@@ -270,15 +242,15 @@ export function AutoTransition<T extends ElementType | undefined>({
       styles = getComputedStyle(measureTarget);
     }
 
-    const parentRect = microcache((): MeasuredParentRect => {
+    const parentRect = microcache((): ParentBounds => {
       const borderBox = measureTarget.getBoundingClientRect();
       const borderLeft = parseFloat(styles.borderLeftWidth || "0");
       const borderRight = parseFloat(styles.borderRightWidth || "0");
       const borderTop = parseFloat(styles.borderTopWidth || "0");
       const borderBottom = parseFloat(styles.borderBottomWidth || "0");
       return {
-        left: borderBox.left + borderLeft,
-        top: borderBox.top + borderTop,
+        x: borderBox.left + borderLeft,
+        y: borderBox.top + borderTop,
         width: borderBox.width - borderLeft - borderRight,
         height: borderBox.height - borderTop - borderBottom,
       };
@@ -287,29 +259,29 @@ export function AutoTransition<T extends ElementType | undefined>({
     const snapshot = microcache(
       () => {
         const parent = parentRect();
-        const result = new Map<Element, Rect>();
+        const result = new Map<Element, ElementSnapshot>();
         for (const child of target.children) {
           if (child instanceof Element) {
-            result.set(child, getRelativePosition(child, parent));
+            result.set(child, getSnapshot(child, parent));
           }
         }
         return result;
       },
       (old) => {
-        const parent = parentRect();
+        const currentParent = parentRect();
         for (const child of target.children) {
           if (child instanceof Element) {
             if (removed.has(child)) continue;
-            const rect = getRelativePosition(child, parent);
-            const oldRect = old.get(child);
-            if (!oldRect) continue;
+            const current = getSnapshot(child, currentParent);
+            const previous = old.get(child);
+            if (!previous) continue;
             if (
-              rect.x !== oldRect.x ||
-              rect.y !== oldRect.y ||
-              rect.width !== oldRect.width ||
-              rect.height !== oldRect.height
+              current.rect.x !== previous.rect.x ||
+              current.rect.y !== previous.rect.y ||
+              current.rect.width !== previous.rect.width ||
+              current.rect.height !== previous.rect.height
             ) {
-              animateNodeMove(child, rect, oldRect, parent);
+              animateNodeMove(child, current, previous);
             }
           }
         }
@@ -320,9 +292,8 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (node instanceof Element) {
         if (removed.has(node)) return node;
         removed.add(node);
-        const parent = parentRect();
-        const rect = snapshot().get(node) ?? getRelativePosition(node, parent);
-        animateNodeExit(node, rect, parent);
+        const nodeSnapshot = snapshot().get(node) ?? getSnapshot(node);
+        animateNodeExit(node, nodeSnapshot);
         return node;
       }
       return Element.prototype.removeChild.call(this, node) as T;
@@ -354,32 +325,34 @@ export function AutoTransition<T extends ElementType | undefined>({
       target.appendChild = Element.prototype.appendChild;
     };
 
-    function animateNodeExit(node: Element, rect: Rect, parent: MeasuredParentRect) {
-      const context = buildExitContext(node, rect, anchor, toParentBounds(parent));
+    function animateNodeExit(node: Element, snapshot: ElementSnapshot) {
+      const context = buildExitContext(node, snapshot.rect, anchor, snapshot.parent);
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
       animation.finished.then(() => node.remove());
       return animation;
     }
 
     function animateNodeEnter(node: Element) {
-      const parent = parentRect();
-      const rect = getRelativePosition(node, parent);
-      const context = buildEnterContext(node, rect, anchor, toParentBounds(parent));
+      const snapshot = getSnapshot(node);
+      const context = buildEnterContext(node, snapshot.rect, anchor, snapshot.parent);
       return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
     }
 
-    function animateNodeMove(node: Element, rect: Rect, oldRect: Rect, parent: MeasuredParentRect) {
-      const context = buildMoveContext(node, rect, oldRect, anchor, toParentBounds(parent));
+    function animateNodeMove(node: Element, current: ElementSnapshot, previous: ElementSnapshot) {
+      const context = buildMoveContext(node, current.rect, previous.rect, anchor, current.parent, previous.parent);
       return transition?.move ? transition.move(context) : defaultMoveTransition(context);
     }
 
-    function getRelativePosition(node: Element, parent = parentRect()): Rect {
+    function getSnapshot(node: Element, parent = parentRect()): ElementSnapshot {
       const rect = node.getBoundingClientRect();
       return {
-        x: rect.left - parent.left,
-        y: rect.top - parent.top,
-        width: rect.width,
-        height: rect.height,
+        rect: {
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        },
+        parent,
       };
     }
   }, [anchor, patch, transition]);
