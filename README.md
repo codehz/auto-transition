@@ -10,7 +10,7 @@
 - **高性能**：基于原生 Web Animations API 实现，确保流畅的 160fps 体验。
 - **布局感知**：自动计算元素在容器内的相对位置，支持平滑的位移和缩放过渡。
 - **锚点感知**：可显式指定 `anchor`，让右侧/底部悬浮容器中的移动和退出动画仍然自然贴边。
-- **高度可定制**：支持通过插件系统自定义动画效果。
+- **高度可定制**：支持通过插件系统自定义动画效果，插件可直接读取锚点感知的几何上下文。
 - **无侵入性**：支持通过 `Slot` 将行为附着到现有布局节点。
 
 ## 安装
@@ -87,13 +87,95 @@ function FloatingActions({ actions }: { actions: string[] }) {
 你可以通过实现此接口来自定义动画：
 
 ```typescript
+type TransitionBaseContext = {
+  element: Element;
+  anchor: Anchor;
+  parent: ParentBounds;
+};
+
+type EnterTransitionContext = TransitionBaseContext & {
+  rect: Rect;
+};
+
+type ExitTransitionContext = TransitionBaseContext & {
+  rect: Rect;
+  insets: ExitInsets;
+};
+
+type MoveTransitionContext = TransitionBaseContext & {
+  current: Rect;
+  previous: Rect;
+  delta: AnchorPoint;
+  scale: {
+    x: number;
+    y: number;
+  };
+};
+
 export type TransitionPlugin = {
-  // 元素插入容器时触发
-  enter?(el: Element): Animation;
-  // 元素从容器移除时触发，rect 为移除时的位置大小
-  exit?(el: Element, rect: Rect): Animation;
-  // 元素在容器内位置或大小变化时触发
-  move?(el: Element, current: Rect, previous: Rect): Animation;
+  enter?(ctx: EnterTransitionContext): Animation;
+  exit?(ctx: ExitTransitionContext): Animation;
+  move?(ctx: MoveTransitionContext): Animation;
+};
+```
+
+`move` 的 `ctx.delta` 和 `ctx.scale`、`exit` 的 `ctx.insets` 都已经按 `anchor` 预计算好了，自定义插件不需要再手写 anchor-aware offset。
+
+### 自定义插件示例
+
+下面这个示例适合右下角悬浮按钮组：移动动画直接使用 `ctx.delta`，退出动画直接使用 `ctx.insets` 固定贴边位置。
+
+```tsx
+import type { TransitionPlugin } from "@codehz/auto-transition";
+
+const floatingActionsTransition: TransitionPlugin = {
+  enter({ element }) {
+    return element.animate(
+      {
+        opacity: [0, 1],
+        transform: ["translateY(8px) scale(0.96)", "translateY(0) scale(1)"],
+      },
+      { duration: 220, easing: "ease-out" },
+    );
+  },
+  exit({ element, rect, insets }) {
+    return element.animate(
+      [
+        {
+          position: "absolute",
+          right: `${insets.right ?? 0}px`,
+          bottom: `${insets.bottom ?? 0}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          margin: "0",
+          opacity: 1,
+          transform: "scale(1)",
+        },
+        {
+          position: "absolute",
+          right: `${insets.right ?? 0}px`,
+          bottom: `${insets.bottom ?? 0}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          margin: "0",
+          opacity: 0,
+          transform: "scale(0.96)",
+        },
+      ],
+      { duration: 200, easing: "ease-in" },
+    );
+  },
+  move({ element, delta, scale }) {
+    return element.animate(
+      {
+        transform: [
+          `translate(${delta.x}px, ${delta.y}px) scale(${scale.x}, ${scale.y})`,
+          "translate(0, 0) scale(1, 1)",
+        ],
+      },
+      { duration: 220, easing: "ease-in-out" },
+    );
+  },
 };
 ```
 

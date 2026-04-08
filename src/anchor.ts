@@ -24,6 +24,14 @@ export type ParentBounds = {
   height: number;
 };
 
+export type MoveGeometry = {
+  delta: AnchorPoint;
+  scale: {
+    x: number;
+    y: number;
+  };
+};
+
 export type AnchorGeometry = AnchorAxis;
 
 export function resolveAnchor(anchor: Anchor): AnchorGeometry {
@@ -59,6 +67,16 @@ export function getAnchorDelta(current: Rect, previous: Rect, anchor: Anchor): A
 
 export function getScaleFactor(previous: number, current: number): number {
   return current === 0 ? 1 : previous / current;
+}
+
+export function getMoveGeometry(current: Rect, previous: Rect, anchor: Anchor): MoveGeometry {
+  return {
+    delta: getAnchorDelta(current, previous, anchor),
+    scale: {
+      x: getScaleFactor(previous.width, current.width),
+      y: getScaleFactor(previous.height, current.height),
+    },
+  };
 }
 
 export function getExitInsets(rect: Rect, parent: ParentBounds, anchor: Anchor): ExitInsets {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Rect } from "./AutoTransition.tsx";
-import { getAnchorDelta, getExitInsets, getScaleFactor, resolveAnchor } from "./anchor.ts";
+import { getAnchorDelta, getExitInsets, getMoveGeometry, getScaleFactor, resolveAnchor } from "./anchor.ts";
 
 const currentRect: Rect = { x: 80, y: 60, width: 120, height: 50 };
 const previousRect: Rect = { x: 40, y: 20, width: 180, height: 90 };
@@ -47,5 +47,16 @@ describe("getScaleFactor", () => {
 
   test("guards zero-sized current dimensions", () => {
     expect(getScaleFactor(180, 0)).toBe(1);
+  });
+});
+
+describe("getMoveGeometry", () => {
+  test.each([
+    ["top-left", { delta: { x: -40, y: -40 }, scale: { x: 1.5, y: 1.8 } }],
+    ["top-right", { delta: { x: 20, y: -40 }, scale: { x: 1.5, y: 1.8 } }],
+    ["bottom-left", { delta: { x: -40, y: 0 }, scale: { x: 1.5, y: 1.8 } }],
+    ["bottom-right", { delta: { x: 20, y: 0 }, scale: { x: 1.5, y: 1.8 } }],
+  ] as const)("combines delta and scale for %s", (anchor, expected) => {
+    expect(getMoveGeometry(currentRect, previousRect, anchor)).toEqual(expected);
   });
 });
