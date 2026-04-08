@@ -73,6 +73,7 @@ export type MoveTransitionContext = TransitionBaseContext & {
   current: Rect;
   previous: Rect;
   delta: Point;
+  anchorDelta: Point;
   scale: MoveGeometry["scale"];
 };
 
@@ -137,6 +138,9 @@ export function buildMoveContext(
   current: Rect,
   previous: Rect,
   parent: ParentBounds,
+  options: {
+    anchorDelta?: Point;
+  } = {},
 ): MoveTransitionContext {
   const geometry = getMoveGeometry(current, previous);
   return {
@@ -145,6 +149,7 @@ export function buildMoveContext(
     current,
     previous,
     delta: geometry.delta,
+    anchorDelta: options.anchorDelta ?? { x: 0, y: 0 },
     scale: geometry.scale,
   };
 }
@@ -201,11 +206,18 @@ export function defaultExitTransition({ element, rect, anchorDelta }: ExitTransi
   return element.animate([startKeyframe, endKeyframe], { duration: 250, easing: "ease-in" });
 }
 
-export function defaultMoveTransition({ element, delta, scale }: MoveTransitionContext): Animation {
+export function defaultMoveTransition({ element, delta, anchorDelta, scale }: MoveTransitionContext): Animation {
+  const compensatedDelta = {
+    x: delta.x + anchorDelta.x,
+    y: delta.y + anchorDelta.y,
+  };
   return element.animate(
     {
       transformOrigin: ["0 0", "0 0"],
-      transform: [`translate(${delta.x}px, ${delta.y}px) scale(${scale.x}, ${scale.y})`, "translate(0, 0) scale(1, 1)"],
+      transform: [
+        `translate(${compensatedDelta.x}px, ${compensatedDelta.y}px) scale(${scale.x}, ${scale.y})`,
+        "translate(0, 0) scale(1, 1)",
+      ],
     },
     { duration: 250, easing: "ease-in" },
   );
@@ -244,6 +256,11 @@ function getExitTransform(anchorDelta: Point, scale: number): string {
   }
   return `translate(${anchorDelta.x}px, ${anchorDelta.y}px) ${scaleTransform}`;
 }
+
+type SnapshotState = {
+  parent: MeasuredParentRect;
+  rects: Map<Element, Rect>;
+};
 
 function lockNodeForExit(node: Element, rect: Rect) {
   const style = (node as HTMLElement).style;
@@ -338,31 +355,34 @@ export function AutoTransition<T extends ElementType | undefined>({
     const parentRect = microcache((): MeasuredParentRect => measureParentRect());
 
     const snapshot = microcache(
-      () => {
+      (): SnapshotState => {
         const parent = parentRect();
-        const result = new Map<Element, Rect>();
+        const rects = new Map<Element, Rect>();
         for (const child of target.children) {
           if (child instanceof Element) {
-            result.set(child, getRelativePosition(child, parent));
+            rects.set(child, getRelativePosition(child, parent));
           }
         }
-        return result;
+        return { parent, rects };
       },
       (old) => {
         const parent = parentRect();
+        const anchorDelta = getExitAnchorDelta(old.parent, parent);
         for (const child of target.children) {
           if (child instanceof Element) {
             if (removed.has(child)) continue;
             const rect = getRelativePosition(child, parent);
-            const oldRect = old.get(child);
+            const oldRect = old.rects.get(child);
             if (!oldRect) continue;
             if (
               rect.x !== oldRect.x ||
               rect.y !== oldRect.y ||
               rect.width !== oldRect.width ||
-              rect.height !== oldRect.height
+              rect.height !== oldRect.height ||
+              anchorDelta.x !== 0 ||
+              anchorDelta.y !== 0
             ) {
-              animateNodeMove(child, rect, oldRect, parent);
+              animateNodeMove(child, rect, oldRect, parent, { anchorDelta });
             }
           }
         }
@@ -374,7 +394,8 @@ export function AutoTransition<T extends ElementType | undefined>({
         if (removed.has(node)) return node;
         removed.add(node);
         const previousParent = measureParentRect();
-        const rect = snapshot().get(node) ?? getRelativePosition(node, previousParent);
+        const previousSnapshot = snapshot();
+        const rect = previousSnapshot.rects.get(node) ?? getRelativePosition(node, previousParent);
         const viewportRect = getViewportRect(node.getBoundingClientRect());
         lockNodeForExit(node, rect);
         const nextParent = measureParentRect();
@@ -439,8 +460,16 @@ export function AutoTransition<T extends ElementType | undefined>({
       return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
     }
 
-    function animateNodeMove(node: Element, rect: Rect, oldRect: Rect, parent: MeasuredParentRect) {
-      const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent));
+    function animateNodeMove(
+      node: Element,
+      rect: Rect,
+      oldRect: Rect,
+      parent: MeasuredParentRect,
+      options?: {
+        anchorDelta?: Point;
+      },
+    ) {
+      const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent), options);
       return transition?.move ? transition.move(context) : defaultMoveTransition(context);
     }
 

@@ -4,6 +4,7 @@ import {
   buildExitContext,
   buildMoveContext,
   defaultExitTransition,
+  defaultMoveTransition,
   getMoveGeometry,
   getScaleFactor,
   type ParentBounds,
@@ -50,7 +51,15 @@ describe("buildMoveContext", () => {
     expect(context.current).toEqual(currentRect);
     expect(context.previous).toEqual(previousRect);
     expect(context.delta).toEqual({ x: -40, y: -40 });
+    expect(context.anchorDelta).toEqual({ x: 0, y: 0 });
     expect(context.scale).toEqual({ x: 1.5, y: 1.8 });
+  });
+
+  test("includes parent anchor compensation when provided", () => {
+    const context = buildMoveContext(element, currentRect, previousRect, parent, { anchorDelta });
+
+    expect(context.delta).toEqual({ x: -40, y: -40 });
+    expect(context.anchorDelta).toEqual(anchorDelta);
   });
 });
 
@@ -74,6 +83,7 @@ describe("TransitionPlugin contexts", () => {
       },
       move(ctx) {
         expect(ctx.delta).toEqual({ x: -40, y: -40 });
+        expect(ctx.anchorDelta).toEqual(anchorDelta);
         expect(ctx.scale).toEqual({ x: 1.5, y: 1.8 });
         seen.push("move");
         return {} as Animation;
@@ -82,7 +92,7 @@ describe("TransitionPlugin contexts", () => {
 
     plugin.enter?.(buildEnterContext(element, currentRect, parent));
     plugin.exit?.(buildExitContext(element, currentRect, parent, { viewportRect, anchorDelta }));
-    plugin.move?.(buildMoveContext(element, currentRect, previousRect, parent));
+    plugin.move?.(buildMoveContext(element, currentRect, previousRect, parent, { anchorDelta }));
 
     expect(seen).toEqual(["enter", "exit", "move"]);
   });
@@ -147,6 +157,45 @@ describe("defaultExitTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes[0]?.transform).toBe("translate(48px, 36px) scale(1, 1)");
     expect(calls[0]?.keyframes[1]?.transform).toBe("translate(48px, 36px) scale(0.96, 0.96)");
+  });
+});
+
+describe("defaultMoveTransition", () => {
+  test("keeps the previous transform output when no parent compensation is needed", () => {
+    const calls: { keyframes: PropertyIndexedKeyframes | Keyframe[] | null; options: KeyframeAnimationOptions }[] = [];
+    const animatedElement = {
+      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
+        calls.push({ keyframes, options: options ?? {} });
+        return { finished: Promise.resolve() } as unknown as Animation;
+      },
+    } as unknown as Element;
+
+    defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      transformOrigin: ["0 0", "0 0"],
+      transform: ["translate(-40px, -40px) scale(1.5, 1.8)", "translate(0, 0) scale(1, 1)"],
+    });
+    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
+  });
+
+  test("adds parent anchor compensation to the move delta", () => {
+    const calls: { keyframes: PropertyIndexedKeyframes | Keyframe[] | null; options: KeyframeAnimationOptions }[] = [];
+    const animatedElement = {
+      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
+        calls.push({ keyframes, options: options ?? {} });
+        return { finished: Promise.resolve() } as unknown as Animation;
+      },
+    } as unknown as Element;
+
+    defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      transformOrigin: ["0 0", "0 0"],
+      transform: ["translate(8px, -4px) scale(1.5, 1.8)", "translate(0, 0) scale(1, 1)"],
+    });
   });
 });
 
