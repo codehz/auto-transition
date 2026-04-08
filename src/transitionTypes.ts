@@ -61,11 +61,7 @@ export type MoveTransitionContext = TransitionBaseContext & {
   scale: MoveGeometry["scale"];
 };
 
-export type TransitionPlugin = {
-  enter?(ctx: EnterTransitionContext): Animation;
-  exit?(ctx: ExitTransitionContext): Animation;
-  move?(ctx: MoveTransitionContext): Animation;
-};
+export type TransitionPhaseHandler<Ctx> = (ctx: Ctx) => Animation;
 
 export type TransitionKeyframes<Ctx> =
   | Keyframe[]
@@ -79,13 +75,29 @@ export type TransitionPhaseRecipe<Ctx> = {
   options?: TransitionTiming<Ctx>;
 };
 
+export type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseRecipe<Ctx>;
+
+export type TransitionPlugin = {
+  enter?: TransitionPhaseLike<EnterTransitionContext>;
+  exit?: TransitionPhaseLike<ExitTransitionContext>;
+  move?: TransitionPhaseLike<MoveTransitionContext>;
+};
+
+export type CompiledTransitionPlugin = {
+  enter?: TransitionPhaseHandler<EnterTransitionContext>;
+  exit?: TransitionPhaseHandler<ExitTransitionContext>;
+  move?: TransitionPhaseHandler<MoveTransitionContext>;
+};
+
 export type TransitionRecipe = {
   enter?: TransitionPhaseRecipe<EnterTransitionContext>;
   exit?: TransitionPhaseRecipe<ExitTransitionContext>;
   move?: TransitionPhaseRecipe<MoveTransitionContext>;
 };
 
-export type TransitionLike = TransitionPlugin | TransitionRecipe;
+export type TransitionDefinition = TransitionPlugin;
+
+export type TransitionLike = TransitionPlugin;
 
 export function buildEnterContext(element: Element, rect: Rect, parent: ParentBounds): EnterTransitionContext {
   return { element, rect, parent };

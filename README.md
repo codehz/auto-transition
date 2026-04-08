@@ -50,32 +50,58 @@ function ListExample() {
 
 ### `AutoTransition` 组件 Props
 
-| 属性         | 类型               | 默认值       | 说明                                                                              |
-| :----------- | :----------------- | :----------- | :-------------------------------------------------------------------------------- |
-| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                 |
-| `transition` | `TransitionLike`   | 内置默认动画 | 用于自定义进入、退出和移动动画；支持旧版 `TransitionPlugin` 和新版声明式 recipe。 |
-| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。           |
-| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                            |
-| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                       |
+| 属性         | 类型               | 默认值       | 说明                                                                                       |
+| :----------- | :----------------- | :----------- | :----------------------------------------------------------------------------------------- |
+| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                          |
+| `transition` | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或声明式 recipe，也支持混搭。 |
+| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                    |
+| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                                     |
+| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                                |
 
-### 推荐写法：`TransitionRecipe`
+### 推荐写法：`TransitionPlugin`
 
-如果你只是想快速定制常见的 enter / exit / move 动画，推荐直接使用声明式 recipe 和内置 presets：
+如果你只是想快速定制常见的 enter / exit / move 动画，推荐直接使用内置 presets；现在也可以在同一个对象里把 recipe 和函数式 phase 混搭：
 
 ```tsx
-import { AutoTransition, transitionPresets, type TransitionRecipe } from "@codehz/auto-transition";
+import { AutoTransition, transitionPresets, type TransitionPlugin } from "@codehz/auto-transition";
 
 const floatingActionsTransition = {
   enter: transitionPresets.enter.slideFade({
     duration: 220,
     distance: 10,
   }),
-  exit: transitionPresets.exit.absoluteSlideFade({
-    duration: 200,
-    distance: 10,
-  }),
+  exit({ element, rect, anchorDelta }) {
+    const translate =
+      anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
+
+    return element.animate(
+      [
+        {
+          position: "absolute",
+          top: `${rect.y}px`,
+          left: `${rect.x}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          margin: "0",
+          opacity: 1,
+          transform: `${translate}scale(1)`,
+        },
+        {
+          position: "absolute",
+          top: `${rect.y}px`,
+          left: `${rect.x}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          margin: "0",
+          opacity: 0,
+          transform: `${translate}scale(0.96)`,
+        },
+      ],
+      { duration: 200, easing: "ease-in" },
+    );
+  },
   move: transitionPresets.move.smooth(),
-} satisfies TransitionRecipe;
+} satisfies TransitionPlugin;
 
 function Example({ children }: { children: React.ReactNode }) {
   return <AutoTransition transition={floatingActionsTransition}>{children}</AutoTransition>;
@@ -107,7 +133,7 @@ function Example({ children }: { children: React.ReactNode }) {
 - `move.translate()` 是只保留位移补偿的轻量版 FLIP。
 - `move.smooth()` 使用更柔和的 easing 和更长的默认时长，适合卡片、面板这类需要“滑顺”感的布局变化。
 
-如果你想显式地把 recipe 编译成旧接口，也可以使用 `defineTransition(recipe)`；传给 `transition` 时两种写法行为一致。
+如果你想显式地把 `TransitionPlugin` 编译成纯函数式接口，也可以使用 `defineTransition(transition)`；传给 `transition` 时两种写法行为一致。
 
 ```ts
 import { defineTransition } from "@codehz/auto-transition";
@@ -130,6 +156,22 @@ type TransitionPhaseRecipe<Ctx> = {
   options?: TransitionTiming<Ctx>;
 };
 
+type TransitionPhaseHandler<Ctx> = (ctx: Ctx) => Animation;
+
+type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseRecipe<Ctx>;
+
+type TransitionPlugin = {
+  enter?: TransitionPhaseLike<EnterTransitionContext>;
+  exit?: TransitionPhaseLike<ExitTransitionContext>;
+  move?: TransitionPhaseLike<MoveTransitionContext>;
+};
+```
+
+为了兼容旧代码，`TransitionLike` 和 `TransitionDefinition` 仍然保留为 `TransitionPlugin` 的类型别名。
+
+如果你希望整个对象都保持声明式，也仍然可以继续使用 `TransitionRecipe`：
+
+```ts
 type TransitionRecipe = {
   enter?: TransitionPhaseRecipe<EnterTransitionContext>;
   exit?: TransitionPhaseRecipe<ExitTransitionContext>;
@@ -137,7 +179,7 @@ type TransitionRecipe = {
 };
 ```
 
-### 兼容写法：`TransitionPlugin`
+### 兼容写法：纯函数式 `TransitionPlugin`
 
 如果你需要完全控制 `Animation` 对象，旧版函数式插件接口仍然完全可用：
 
@@ -168,7 +210,7 @@ type MoveTransitionContext = TransitionBaseContext & {
   };
 };
 
-export type TransitionPlugin = {
+export type CompiledTransitionPlugin = {
   enter?(ctx: EnterTransitionContext): Animation;
   exit?(ctx: ExitTransitionContext): Animation;
   move?(ctx: MoveTransitionContext): Animation;

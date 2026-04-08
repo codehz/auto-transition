@@ -9,6 +9,7 @@ import {
   defineTransition,
   getMoveGeometry,
   getScaleFactor,
+  type CompiledTransitionPlugin,
   type ParentBounds,
   type Point,
   type Rect,
@@ -82,7 +83,7 @@ describe("buildMoveContext", () => {
 describe("TransitionPlugin contexts", () => {
   test("custom plugins can consume precomputed move geometry directly", () => {
     const seen: string[] = [];
-    const plugin: TransitionPlugin = {
+    const plugin: CompiledTransitionPlugin = {
       enter(ctx) {
         expect(ctx.element).toBe(element);
         expect(ctx.parent).toEqual(parent);
@@ -232,6 +233,56 @@ describe("defaultMoveTransition", () => {
 });
 
 describe("defineTransition", () => {
+  test("supports mixing recipe phases with imperative functions in one transition", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const exit = (ctx: Parameters<NonNullable<CompiledTransitionPlugin["exit"]>>[0]) => {
+      expect(ctx.rect).toEqual(currentRect);
+      expect(ctx.viewportRect).toEqual(viewportRect);
+      expect(ctx.anchorDelta).toEqual(anchorDelta);
+      return { finished: Promise.resolve() } as unknown as Animation;
+    };
+
+    const transition: TransitionPlugin = {
+      enter: transitionPresets.enter.fade({
+        duration: 180,
+      }),
+      exit,
+      move: transitionPresets.move.translate({
+        duration: 200,
+      }),
+    };
+
+    const compiled = defineTransition(transition);
+
+    expect(compiled.exit).toBe(exit);
+
+    compiled.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+    compiled.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+      }),
+    );
+    compiled.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual({
+      keyframes: {
+        opacity: [0, 1],
+        transformOrigin: ["50% 50%", "50% 50%"],
+        transform: ["scale(1, 1)", "scale(1, 1)"],
+      },
+      options: { duration: 180, easing: "ease-out" },
+    });
+    expect(calls[1]).toEqual({
+      keyframes: {
+        transformOrigin: ["0 0", "0 0"],
+        transform: ["translate(8px, -4px)", "translate(0, 0)"],
+      },
+      options: { duration: 200, easing: "ease-out" },
+    });
+  });
+
   test("compiles declarative recipes into transition plugins", () => {
     const { animatedElement, calls } = createAnimatedElement();
     const transition = defineTransition({

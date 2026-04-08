@@ -19,7 +19,7 @@ import {
   type ParentBounds,
   type Point,
   type Rect,
-  type TransitionLike,
+  type TransitionPlugin,
 } from "./transitionTypes.ts";
 import {
   defaultEnterTransition,
@@ -36,6 +36,7 @@ export {
   getMoveGeometry,
   getScaleFactor,
   type Dimensions,
+  type CompiledTransitionPlugin,
   type EnterTransitionContext,
   type ExitTransitionContext,
   type MoveGeometry,
@@ -45,7 +46,10 @@ export {
   type Rect,
   type TransitionBaseContext,
   type TransitionKeyframes,
+  type TransitionDefinition,
   type TransitionLike,
+  type TransitionPhaseHandler,
+  type TransitionPhaseLike,
   type TransitionPhaseRecipe,
   type TransitionPlugin,
   type TransitionRecipe,
@@ -82,7 +86,7 @@ type MeasuredParentRect = ParentBounds & {
  */
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
-  transition?: TransitionLike;
+  transition?: TransitionPlugin;
   patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
 };

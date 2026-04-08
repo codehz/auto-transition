@@ -1,14 +1,14 @@
 import type {
+  CompiledTransitionPlugin,
   EnterTransitionContext,
   ExitTransitionContext,
   MoveGeometry,
   MoveTransitionContext,
   Point,
   TransitionBaseContext,
-  TransitionLike,
+  TransitionPhaseLike,
   TransitionPhaseRecipe,
   TransitionPlugin,
-  TransitionRecipe,
   TransitionTiming,
 } from "./transitionTypes.ts";
 
@@ -164,12 +164,15 @@ function createTransitionAnimation<Ctx extends TransitionBaseContext>(
 }
 
 function compileTransitionPhase<Ctx extends TransitionBaseContext>(
-  recipe: TransitionPhaseRecipe<Ctx> | undefined,
+  phase: TransitionPhaseLike<Ctx> | undefined,
 ): ((ctx: Ctx) => Animation) | undefined {
-  if (!recipe) {
+  if (!phase) {
     return undefined;
   }
-  return (ctx: Ctx) => createTransitionAnimation(ctx, recipe);
+  if (typeof phase === "function") {
+    return phase;
+  }
+  return (ctx: Ctx) => createTransitionAnimation(ctx, phase);
 }
 
 function absoluteKeyframeBase(
@@ -296,27 +299,19 @@ function createMoveFlip({
   };
 }
 
-export function defineTransition(recipe: TransitionRecipe): TransitionPlugin {
+export function defineTransition(transition: TransitionPlugin): CompiledTransitionPlugin {
   return {
-    enter: compileTransitionPhase(recipe.enter),
-    exit: compileTransitionPhase(recipe.exit),
-    move: compileTransitionPhase(recipe.move),
+    enter: compileTransitionPhase(transition.enter),
+    exit: compileTransitionPhase(transition.exit),
+    move: compileTransitionPhase(transition.move),
   };
 }
 
-function isTransitionRecipe(transition: TransitionLike): transition is TransitionRecipe {
-  for (const phase of [transition.enter, transition.exit, transition.move]) {
-    if (phase == null) continue;
-    return typeof phase !== "function";
-  }
-  return true;
-}
-
-export function normalizeTransition(transition: TransitionLike | undefined): TransitionPlugin | undefined {
+export function normalizeTransition(transition: TransitionPlugin | undefined): CompiledTransitionPlugin | undefined {
   if (!transition) {
     return undefined;
   }
-  return isTransitionRecipe(transition) ? defineTransition(transition) : transition;
+  return defineTransition(transition);
 }
 
 export const transitionPresets = {
