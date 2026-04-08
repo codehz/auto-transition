@@ -24,21 +24,19 @@ export type ParentBounds = {
   height: number;
 };
 
-export type AnchorGeometry = AnchorAxis & {
-  transformOrigin: string;
-};
+export type AnchorGeometry = AnchorAxis;
 
 export function resolveAnchor(anchor: Anchor): AnchorGeometry {
   switch (anchor) {
     case "top-right":
-      return { x: "right", y: "top", transformOrigin: "100% 0" };
+      return { x: "right", y: "top" };
     case "bottom-left":
-      return { x: "left", y: "bottom", transformOrigin: "0 100%" };
+      return { x: "left", y: "bottom" };
     case "bottom-right":
-      return { x: "right", y: "bottom", transformOrigin: "100% 100%" };
+      return { x: "right", y: "bottom" };
     case "top-left":
     default:
-      return { x: "left", y: "top", transformOrigin: "0 0" };
+      return { x: "left", y: "top" };
   }
 }
 

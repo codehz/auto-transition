@@ -10,7 +10,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { getAnchorDelta, getExitInsets, getScaleFactor, resolveAnchor, type Anchor } from "./anchor.ts";
+import { getAnchorDelta, getExitInsets, getScaleFactor, type Anchor } from "./anchor.ts";
 import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
 import { patchActivity } from "./ActivityPatch.tsx";
@@ -37,6 +37,8 @@ export type Dimensions = {
   width: number;
   height: number;
 };
+
+const DEFAULT_TRANSFORM_ORIGIN = "50% 50%";
 
 /**
  * Common props for `AutoTransition`.
@@ -208,14 +210,13 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.exit) {
         animation = transition.exit(node, rect);
       } else {
-        const { transformOrigin } = resolveAnchor(anchor);
         const insets = getExitInsets(rect, parentRect(), anchor);
         const width = `${rect.width}px`;
         const height = `${rect.height}px`;
         const startKeyframe: Keyframe = {
           position: "absolute",
           opacity: 1,
-          transformOrigin,
+          transformOrigin: DEFAULT_TRANSFORM_ORIGIN,
           transform: "scale(1, 1)",
           width,
           height,
@@ -248,11 +249,10 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.enter) {
         transition.enter(node);
       } else {
-        const { transformOrigin } = resolveAnchor(anchor);
         node.animate(
           {
             opacity: [0, 1],
-            transformOrigin: [transformOrigin, transformOrigin],
+            transformOrigin: [DEFAULT_TRANSFORM_ORIGIN, DEFAULT_TRANSFORM_ORIGIN],
             transform: ["scale(0.96, 0.96)", "scale(1, 1)"],
           },
           { duration: 250, easing: "ease-out" },
@@ -264,13 +264,12 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.move) {
         transition.move(node, rect, oldRect);
       } else {
-        const { transformOrigin } = resolveAnchor(anchor);
         const delta = getAnchorDelta(rect, oldRect, anchor);
         const sx = getScaleFactor(oldRect.width, rect.width);
         const sy = getScaleFactor(oldRect.height, rect.height);
         node.animate(
           {
-            transformOrigin: [transformOrigin, transformOrigin],
+            transformOrigin: [DEFAULT_TRANSFORM_ORIGIN, DEFAULT_TRANSFORM_ORIGIN],
             transform: [`translate(${delta.x}px, ${delta.y}px) scale(${sx}, ${sy})`, "translate(0, 0) scale(1, 1)"],
           },
           { duration: 250, easing: "ease-in" },

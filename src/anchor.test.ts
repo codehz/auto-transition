@@ -7,12 +7,12 @@ const previousRect: Rect = { x: 40, y: 20, width: 180, height: 90 };
 
 describe("resolveAnchor", () => {
   test.each([
-    ["top-left", "0 0"],
-    ["top-right", "100% 0"],
-    ["bottom-left", "0 100%"],
-    ["bottom-right", "100% 100%"],
-  ] as const)("returns the expected transform origin for %s", (anchor, transformOrigin) => {
-    expect(resolveAnchor(anchor).transformOrigin).toBe(transformOrigin);
+    ["top-left", { x: "left", y: "top" }],
+    ["top-right", { x: "right", y: "top" }],
+    ["bottom-left", { x: "left", y: "bottom" }],
+    ["bottom-right", { x: "right", y: "bottom" }],
+  ] as const)("returns the expected geometry for %s", (anchor, geometry) => {
+    expect(resolveAnchor(anchor)).toEqual(geometry);
   });
 });
 
