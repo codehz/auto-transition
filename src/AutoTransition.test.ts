@@ -37,6 +37,26 @@ function createAnimatedElement() {
   return { animatedElement, calls };
 }
 
+function withMockedComputedOpacity(opacity: string, run: () => void) {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+
+  Object.defineProperty(globalThis, "getComputedStyle", {
+    configurable: true,
+    writable: true,
+    value: () => ({ opacity }),
+  });
+
+  try {
+    run();
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "getComputedStyle", originalDescriptor);
+    } else {
+      delete (globalThis as { getComputedStyle?: typeof getComputedStyle }).getComputedStyle;
+    }
+  }
+}
+
 describe("buildExitContext", () => {
   test("keeps element geometry relative to the measured parent", () => {
     const context = buildExitContext(element, currentRect, parent);
@@ -127,6 +147,19 @@ describe("defaultEnterTransition", () => {
     });
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-out" });
   });
+
+  test("scales fade opacity from the element's computed opacity", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+
+    withMockedComputedOpacity("0.5", () => {
+      defaultEnterTransition(buildEnterContext(animatedElement, currentRect, parent));
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      opacity: [0, 0.5],
+    });
+  });
 });
 
 describe("defaultExitTransition", () => {
@@ -163,6 +196,42 @@ describe("defaultExitTransition", () => {
       },
     ]);
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
+  });
+
+  test("starts exit fade from the element's computed opacity", () => {
+    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
+    const animatedElement = {
+      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
+        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
+        return { finished: Promise.resolve() } as unknown as Animation;
+      },
+    } as unknown as Element;
+
+    withMockedComputedOpacity("0.5", () => {
+      defaultExitTransition(buildExitContext(animatedElement, currentRect, parent));
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        position: "absolute",
+        opacity: 0.5,
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+      {
+        position: "absolute",
+        opacity: 0,
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+    ]);
   });
 
   test("adds a fixed translate compensation when the parent shifts on exit", () => {

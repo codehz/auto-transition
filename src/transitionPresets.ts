@@ -153,6 +153,40 @@ function resolveTransitionOptions<Ctx>(
   return typeof options === "function" ? options(ctx) : options;
 }
 
+function parseOpacity(value: string | undefined): number | undefined {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const opacity = Number.parseFloat(value);
+  return Number.isFinite(opacity) ? opacity : undefined;
+}
+
+function getElementOpacity(element: Element): number {
+  if (typeof globalThis.getComputedStyle === "function") {
+    try {
+      const computedOpacity = parseOpacity(globalThis.getComputedStyle(element).opacity);
+      if (computedOpacity != null) {
+        return computedOpacity;
+      }
+    } catch {
+      // Ignore environments where getComputedStyle only accepts real DOM elements.
+    }
+  }
+
+  if ("style" in element) {
+    const inlineOpacity = parseOpacity((element as { style?: { opacity?: string } }).style?.opacity);
+    if (inlineOpacity != null) {
+      return inlineOpacity;
+    }
+  }
+
+  return 1;
+}
+
+function relativeOpacity(opacityFactor: number, baseOpacity: number): number {
+  return opacityFactor * baseOpacity;
+}
+
 function createTransitionAnimation<Ctx extends TransitionBaseContext>(
   ctx: Ctx,
   recipe: TransitionPhaseRecipe<Ctx>,
@@ -205,19 +239,22 @@ function createEnterFadeScale({
   transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
 }: EnterFadeScaleOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
   return {
-    keyframes: {
-      opacity: [fromOpacity, toOpacity],
-      transformOrigin: [transformOrigin, transformOrigin],
-      transform: [
-        buildTransform({
-          translate: fromTranslate,
-          scale: toScale(fromScale, 1),
-        }),
-        buildTransform({
-          translate: toTranslate,
-          scale: toScale(endScale, 1),
-        }),
-      ],
+    keyframes: ({ element }) => {
+      const baseOpacity = getElementOpacity(element);
+      return {
+        opacity: [relativeOpacity(fromOpacity, baseOpacity), relativeOpacity(toOpacity, baseOpacity)],
+        transformOrigin: [transformOrigin, transformOrigin],
+        transform: [
+          buildTransform({
+            translate: fromTranslate,
+            scale: toScale(fromScale, 1),
+          }),
+          buildTransform({
+            translate: toTranslate,
+            scale: toScale(endScale, 1),
+          }),
+        ],
+      };
     },
     options: { duration, easing },
   };
@@ -234,17 +271,20 @@ function createEnterFade({
 }: EnterFadeOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
   const fromTransform = buildTransform({ translate: fromTranslate });
   const toTransform = buildTransform({ translate: toTranslate });
-  const keyframes: PropertyIndexedKeyframes = {
-    opacity: [fromOpacity, toOpacity],
-  };
-
-  if (fromTransform || toTransform) {
-    keyframes.transformOrigin = [transformOrigin, transformOrigin];
-    keyframes.transform = [fromTransform, toTransform];
-  }
-
   return {
-    keyframes,
+    keyframes: ({ element }) => {
+      const baseOpacity = getElementOpacity(element);
+      const keyframes: PropertyIndexedKeyframes = {
+        opacity: [relativeOpacity(fromOpacity, baseOpacity), relativeOpacity(toOpacity, baseOpacity)],
+      };
+
+      if (fromTransform || toTransform) {
+        keyframes.transformOrigin = [transformOrigin, transformOrigin];
+        keyframes.transform = [fromTransform, toTransform];
+      }
+
+      return keyframes;
+    },
     options: { duration, easing },
   };
 }
@@ -260,11 +300,12 @@ function createExitAbsoluteFadeScale({
   transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
 }: ExitAbsoluteFadeScaleOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
   return {
-    keyframes: ({ rect, anchorDelta }) => {
+    keyframes: ({ element, rect, anchorDelta }) => {
+      const baseOpacity = getElementOpacity(element);
       const translate = includeAnchorDelta ? anchorDelta : undefined;
       const startKeyframe = absoluteKeyframeBase(
         rect,
-        fromOpacity,
+        relativeOpacity(fromOpacity, baseOpacity),
         transformOrigin,
         buildTransform({
           translate,
@@ -276,7 +317,7 @@ function createExitAbsoluteFadeScale({
         startKeyframe,
         {
           ...startKeyframe,
-          opacity: toOpacity,
+          opacity: relativeOpacity(toOpacity, baseOpacity),
           transform: buildTransform({
             translate,
             scale: toScale(endScale, 1),
@@ -297,16 +338,22 @@ function createExitAbsoluteFade({
   transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
 }: ExitAbsoluteFadeOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
   return {
-    keyframes: ({ rect, anchorDelta }) => {
+    keyframes: ({ element, rect, anchorDelta }) => {
+      const baseOpacity = getElementOpacity(element);
       const translate = includeAnchorDelta ? anchorDelta : undefined;
       const transform = buildTransform({ translate });
-      const startKeyframe = absoluteKeyframeBase(rect, fromOpacity, transformOrigin, transform);
+      const startKeyframe = absoluteKeyframeBase(
+        rect,
+        relativeOpacity(fromOpacity, baseOpacity),
+        transformOrigin,
+        transform,
+      );
 
       return [
         startKeyframe,
         {
           ...startKeyframe,
-          opacity: toOpacity,
+          opacity: relativeOpacity(toOpacity, baseOpacity),
         },
       ];
     },
@@ -399,23 +446,30 @@ export const transitionPresets = {
       transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
     }: EnterPopOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
       return {
-        keyframes: {
-          opacity: [fromOpacity, toOpacity, toOpacity],
-          transformOrigin: [transformOrigin, transformOrigin, transformOrigin],
-          transform: [
-            buildTransform({
-              translate: fromTranslate,
-              scale: toScale(fromScale, 1),
-            }),
-            buildTransform({
-              translate: toTranslate,
-              scale: toScale(peakScale, 1),
-            }),
-            buildTransform({
-              translate: toTranslate,
-              scale: { x: 1, y: 1 },
-            }),
-          ],
+        keyframes: ({ element }) => {
+          const baseOpacity = getElementOpacity(element);
+          return {
+            opacity: [
+              relativeOpacity(fromOpacity, baseOpacity),
+              relativeOpacity(toOpacity, baseOpacity),
+              relativeOpacity(toOpacity, baseOpacity),
+            ],
+            transformOrigin: [transformOrigin, transformOrigin, transformOrigin],
+            transform: [
+              buildTransform({
+                translate: fromTranslate,
+                scale: toScale(fromScale, 1),
+              }),
+              buildTransform({
+                translate: toTranslate,
+                scale: toScale(peakScale, 1),
+              }),
+              buildTransform({
+                translate: toTranslate,
+                scale: { x: 1, y: 1 },
+              }),
+            ],
+          };
         },
         options: { duration, easing },
       };
@@ -440,12 +494,13 @@ export const transitionPresets = {
       transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
     }: ExitAbsoluteSlideFadeOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
       return {
-        keyframes: ({ rect, anchorDelta }) => {
+        keyframes: ({ element, rect, anchorDelta }) => {
+          const baseOpacity = getElementOpacity(element);
           const baseTranslate = includeAnchorDelta ? anchorDelta : { x: 0, y: 0 };
           const endTranslate = addPoints(baseTranslate, directionalOffset(distance, axis, direction));
           const startKeyframe = absoluteKeyframeBase(
             rect,
-            fromOpacity,
+            relativeOpacity(fromOpacity, baseOpacity),
             transformOrigin,
             buildTransform({
               translate: baseTranslate,
@@ -457,7 +512,7 @@ export const transitionPresets = {
             startKeyframe,
             {
               ...startKeyframe,
-              opacity: toOpacity,
+              opacity: relativeOpacity(toOpacity, baseOpacity),
               transform: buildTransform({
                 translate: endTranslate,
                 scale: { x: 1, y: 1 },
