@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { patchActivity } from "./ActivityPatch.tsx";
-import { microcache } from "./microcache.ts";
+import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 import { useForkRef } from "./useForkRef.ts";
 
 /**
@@ -239,16 +239,6 @@ function getViewportRect(rect: DOMRectReadOnly): Rect {
   };
 }
 
-function getExitAnchorDelta(
-  previousParent: Pick<MeasuredParentRect, "left" | "top">,
-  nextParent: Pick<MeasuredParentRect, "left" | "top">,
-): Point {
-  return {
-    x: previousParent.left - nextParent.left,
-    y: previousParent.top - nextParent.top,
-  };
-}
-
 function getExitTransform(anchorDelta: Point, scale: number): string {
   const scaleTransform = `scale(${scale}, ${scale})`;
   if (anchorDelta.x === 0 && anchorDelta.y === 0) {
@@ -257,13 +247,43 @@ function getExitTransform(anchorDelta: Point, scale: number): string {
   return `translate(${anchorDelta.x}px, ${anchorDelta.y}px) ${scaleTransform}`;
 }
 
-type SnapshotState = {
-  parent: MeasuredParentRect;
-  rects: Map<Element, Rect>;
+type SnapshotState = BatchSnapshot<Element>;
+
+type LockedStyleState = {
+  position: string;
+  top: string;
+  left: string;
+  right: string;
+  bottom: string;
+  width: string;
+  height: string;
+  margin: string;
+  pointerEvents: string;
 };
 
-function lockNodeForExit(node: Element, rect: Rect) {
+type PendingExitState = PendingExitRecord<Element> & {
+  lockedStyles: LockedStyleState;
+};
+
+type BatchState = {
+  before: SnapshotState;
+  pendingExits: Map<Element, PendingExitState>;
+  pendingEnters: Set<Element>;
+};
+
+function lockNodeForExit(node: Element, rect: Rect): LockedStyleState {
   const style = (node as HTMLElement).style;
+  const lockedStyles = {
+    position: style.position,
+    top: style.top,
+    left: style.left,
+    right: style.right,
+    bottom: style.bottom,
+    width: style.width,
+    height: style.height,
+    margin: style.margin,
+    pointerEvents: style.pointerEvents,
+  };
   style.position = "absolute";
   style.top = `${rect.y}px`;
   style.left = `${rect.x}px`;
@@ -273,6 +293,20 @@ function lockNodeForExit(node: Element, rect: Rect) {
   style.height = `${rect.height}px`;
   style.margin = "0";
   style.pointerEvents = "none";
+  return lockedStyles;
+}
+
+function restoreLockedNode(node: Element, lockedStyles: LockedStyleState) {
+  const style = (node as HTMLElement).style;
+  style.position = lockedStyles.position;
+  style.top = lockedStyles.top;
+  style.left = lockedStyles.left;
+  style.right = lockedStyles.right;
+  style.bottom = lockedStyles.bottom;
+  style.width = lockedStyles.width;
+  style.height = lockedStyles.height;
+  style.margin = lockedStyles.margin;
+  style.pointerEvents = lockedStyles.pointerEvents;
 }
 
 /**
@@ -324,7 +358,8 @@ export function AutoTransition<T extends ElementType | undefined>({
   const ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const removed = new Set<Element>();
+    const exiting = new Set<Element>();
+    let batch: BatchState | null = null;
     const target = ref.current!;
     if (patch) {
       patchActivity(target);
@@ -352,78 +387,130 @@ export function AutoTransition<T extends ElementType | undefined>({
       };
     }
 
-    const parentRect = microcache((): MeasuredParentRect => measureParentRect());
+    function captureSnapshot(): SnapshotState {
+      const parent = measureParentRect();
+      const rects = new Map<Element, Rect>();
+      for (const child of target.children) {
+        if (!(child instanceof Element) || exiting.has(child)) continue;
+        rects.set(child, getRelativePosition(child, parent));
+      }
+      return { parent, rects };
+    }
 
-    const snapshot = microcache(
-      (): SnapshotState => {
-        const parent = parentRect();
-        const rects = new Map<Element, Rect>();
-        for (const child of target.children) {
-          if (child instanceof Element) {
-            rects.set(child, getRelativePosition(child, parent));
-          }
-        }
-        return { parent, rects };
-      },
-      (old) => {
-        const parent = parentRect();
-        const anchorDelta = getExitAnchorDelta(old.parent, parent);
-        for (const child of target.children) {
-          if (child instanceof Element) {
-            if (removed.has(child)) continue;
-            const rect = getRelativePosition(child, parent);
-            const oldRect = old.rects.get(child);
-            if (!oldRect) continue;
-            if (
-              rect.x !== oldRect.x ||
-              rect.y !== oldRect.y ||
-              rect.width !== oldRect.width ||
-              rect.height !== oldRect.height ||
-              anchorDelta.x !== 0 ||
-              anchorDelta.y !== 0
-            ) {
-              animateNodeMove(child, rect, oldRect, parent, { anchorDelta });
-            }
-          }
-        }
-      },
-    );
+    function ensureBatch(): BatchState {
+      if (batch) {
+        return batch;
+      }
+
+      const nextBatch: BatchState = {
+        before: captureSnapshot(),
+        pendingExits: new Map<Element, PendingExitState>(),
+        pendingEnters: new Set<Element>(),
+      };
+      batch = nextBatch;
+
+      queueMicrotask(() => {
+        if (batch !== nextBatch) return;
+        batch = null;
+        flushBatch(nextBatch);
+      });
+
+      return nextBatch;
+    }
+
+    function flushBatch(activeBatch: BatchState) {
+      const after = captureSnapshot();
+      const finalNodes = Array.from(after.rects.keys());
+      const plan = planBatchAnimations({
+        before: activeBatch.before,
+        after,
+        finalNodes,
+        pendingEnters: activeBatch.pendingEnters,
+        pendingExits: activeBatch.pendingExits,
+      });
+
+      for (const move of plan.moves) {
+        animateNodeMove(move.node, move.current, move.previous, after.parent, {
+          anchorDelta: move.anchorDelta,
+        });
+      }
+
+      for (const enter of plan.enters) {
+        animateNodeEnter(enter.node, enter.rect, after.parent);
+      }
+
+      for (const exit of plan.exits) {
+        animateNodeExit(exit.node, exit.rect, activeBatch.before.parent, {
+          viewportRect: exit.viewportRect,
+          anchorDelta: exit.anchorDelta,
+        });
+      }
+    }
 
     target.removeChild = function removeChild<T extends Node>(node: T) {
       if (node instanceof Element) {
-        if (removed.has(node)) return node;
-        removed.add(node);
-        const previousParent = measureParentRect();
-        const previousSnapshot = snapshot();
-        const rect = previousSnapshot.rects.get(node) ?? getRelativePosition(node, previousParent);
+        if (exiting.has(node)) return node;
+
+        const activeBatch = ensureBatch();
+        if (activeBatch.pendingEnters.delete(node) && !activeBatch.before.rects.has(node)) {
+          if (node.parentNode === target) {
+            Element.prototype.removeChild.call(target, node);
+          }
+          return node;
+        }
+
+        const rect = activeBatch.before.rects.get(node) ?? getRelativePosition(node, activeBatch.before.parent);
         const viewportRect = getViewportRect(node.getBoundingClientRect());
-        lockNodeForExit(node, rect);
-        const nextParent = measureParentRect();
-        const anchorDelta = getExitAnchorDelta(previousParent, nextParent);
-        animateNodeExit(node, rect, previousParent, { viewportRect, anchorDelta });
+        const lockedStyles = lockNodeForExit(node, rect);
+        exiting.add(node);
+        activeBatch.pendingExits.set(node, {
+          node,
+          rect,
+          viewportRect,
+          lockedStyles,
+        });
         return node;
       }
+      ensureBatch();
       return Element.prototype.removeChild.call(this, node) as T;
     };
 
     target.insertBefore = function insertBefore<T extends Node>(node: T, child: Node | null) {
-      snapshot();
+      const activeBatch = ensureBatch();
       if (!(node instanceof Element)) {
         return Element.prototype.insertBefore.call(this, node, child) as T;
       }
-      Element.prototype.insertBefore.call(this, node, child);
-      animateNodeEnter(node);
-      return node;
+      const inserted = Element.prototype.insertBefore.call(this, node, child) as T;
+      const pendingExit = activeBatch.pendingExits.get(node);
+      if (pendingExit) {
+        activeBatch.pendingExits.delete(node);
+        exiting.delete(node);
+        restoreLockedNode(node, pendingExit.lockedStyles);
+        return inserted;
+      }
+      if (!activeBatch.before.rects.has(node)) {
+        activeBatch.pendingEnters.add(node);
+      }
+      return inserted;
     };
 
     target.appendChild = function appendChild<T extends Node>(node: T) {
-      snapshot();
+      const activeBatch = ensureBatch();
       if (!(node instanceof Element)) {
         return Element.prototype.appendChild.call(this, node) as T;
       }
-      Element.prototype.appendChild.call(this, node);
-      animateNodeEnter(node);
-      return node;
+      const appended = Element.prototype.appendChild.call(this, node) as T;
+      const pendingExit = activeBatch.pendingExits.get(node);
+      if (pendingExit) {
+        activeBatch.pendingExits.delete(node);
+        exiting.delete(node);
+        restoreLockedNode(node, pendingExit.lockedStyles);
+        return appended;
+      }
+      if (!activeBatch.before.rects.has(node)) {
+        activeBatch.pendingEnters.add(node);
+      }
+      return appended;
     };
 
     return () => {
@@ -444,7 +531,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       const context = buildExitContext(node, rect, toParentBounds(parent), options);
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
       const finalize = () => {
-        removed.delete(node);
+        exiting.delete(node);
         if (node.parentNode === target) {
           Element.prototype.removeChild.call(target, node);
         }
@@ -453,10 +540,10 @@ export function AutoTransition<T extends ElementType | undefined>({
       return animation;
     }
 
-    function animateNodeEnter(node: Element) {
-      const parent = parentRect();
-      const rect = getRelativePosition(node, parent);
-      const context = buildEnterContext(node, rect, toParentBounds(parent));
+    function animateNodeEnter(node: Element, rect?: Rect, parent?: MeasuredParentRect) {
+      const currentParent = parent ?? measureParentRect();
+      const currentRect = rect ?? getRelativePosition(node, currentParent);
+      const context = buildEnterContext(node, currentRect, toParentBounds(currentParent));
       return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
     }
 
@@ -473,7 +560,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       return transition?.move ? transition.move(context) : defaultMoveTransition(context);
     }
 
-    function getRelativePosition(node: Element, parent = parentRect()): Rect {
+    function getRelativePosition(node: Element, parent = measureParentRect()): Rect {
       const rect = node.getBoundingClientRect();
       return {
         x: rect.left - parent.left,

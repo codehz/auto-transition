@@ -12,6 +12,7 @@ import {
   type Rect,
   type TransitionPlugin,
 } from "./AutoTransition.tsx";
+import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 
 const element = { id: "demo" } as unknown as Element;
 const parent: ParentBounds = { width: 300, height: 200 };
@@ -213,5 +214,120 @@ describe("geometry helpers", () => {
       delta: { x: -40, y: -40 },
       scale: { x: 1.5, y: 1.8 },
     });
+  });
+});
+
+describe("planBatchAnimations", () => {
+  const batchParent = { left: 0, top: 0, width: 300, height: 200 };
+
+  function createSnapshot<T>(parent: BatchSnapshot<T>["parent"], entries: Array<[T, Rect]>): BatchSnapshot<T> {
+    return {
+      parent,
+      rects: new Map(entries),
+    };
+  }
+
+  function createExit<T>(node: T, rect: Rect): PendingExitRecord<T> {
+    return {
+      node,
+      rect,
+      viewportRect: rect,
+    };
+  }
+
+  test("uses the final batch anchor delta for replacement exits", () => {
+    const oldNode = { id: "old" };
+    const newNode = { id: "new" };
+    const before = createSnapshot({ ...batchParent, left: 120, top: 80 }, [[oldNode, currentRect]]);
+    const after = createSnapshot({ ...batchParent, left: 72, top: 44 }, [[newNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [newNode],
+      pendingEnters: new Set([newNode]),
+      pendingExits: new Map([[oldNode, createExit(oldNode, currentRect)]]),
+    });
+
+    expect(plan.enters.map((entry) => entry.node)).toEqual([newNode]);
+    expect(plan.exits).toEqual([
+      {
+        node: oldNode,
+        rect: currentRect,
+        viewportRect: currentRect,
+        anchorDelta: { x: 48, y: 36 },
+      },
+    ]);
+  });
+
+  test("applies the same net anchor compensation to moves after batch layout shifts", () => {
+    const persistedNode = { id: "persisted" };
+    const before = createSnapshot({ ...batchParent, left: 200, top: 160 }, [[persistedNode, previousRect]]);
+    const after = createSnapshot({ ...batchParent, left: 152, top: 124 }, [[persistedNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [persistedNode],
+      pendingEnters: new Set<typeof persistedNode>(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves).toEqual([
+      {
+        node: persistedNode,
+        previous: previousRect,
+        current: currentRect,
+        anchorDelta: { x: 48, y: 36 },
+      },
+    ]);
+  });
+
+  test("keeps reordered existing nodes on the move path instead of enter", () => {
+    const existingNode = { id: "existing" };
+    const before = createSnapshot(batchParent, [[existingNode, previousRect]]);
+    const after = createSnapshot(batchParent, [[existingNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [existingNode],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves).toHaveLength(1);
+    expect(plan.moves[0]?.node).toBe(existingNode);
+    expect(plan.enters).toEqual([]);
+  });
+
+  test("treats same-batch remove and reinsert of the same node as a move", () => {
+    const reinsertedNode = { id: "same-node" };
+    const before = createSnapshot(batchParent, [[reinsertedNode, previousRect]]);
+    const after = createSnapshot(batchParent, [[reinsertedNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [reinsertedNode],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves.map((entry) => entry.node)).toEqual([reinsertedNode]);
+    expect(plan.exits).toEqual([]);
+    expect(plan.enters).toEqual([]);
+  });
+
+  test("drops transient same-batch inserts that are removed before flush", () => {
+    const before = createSnapshot(batchParent, []);
+    const after = createSnapshot(batchParent, []);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves).toEqual([]);
+    expect(plan.enters).toEqual([]);
+    expect(plan.exits).toEqual([]);
   });
 });

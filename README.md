@@ -96,11 +96,11 @@ export type TransitionPlugin = {
 };
 ```
 
-`move` 的 `ctx.delta` 和 `ctx.scale` 已经按标准 FLIP 几何预计算好了；如果父容器因为 `right` / `bottom` 锚定而在同一次更新里整体平移，`ctx.anchorDelta` 会额外给出这段父级位移补偿。
+`move` 的 `ctx.delta` 和 `ctx.scale` 已经按标准 FLIP 几何预计算好了；如果父容器因为 `right` / `bottom` 锚定、同一微任务内的 remove / insert / reorder 组合，或 replacement 式的“删旧插新”而在整次提交前后发生净位移，`ctx.anchorDelta` 会额外给出这段测量基准补偿。
 
 ### 自定义插件示例
 
-下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置，并通过 `ctx.anchorDelta` 补偿父容器因为 `right` / `bottom` 锚定而产生的整体位移。
+下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置，并通过 `ctx.anchorDelta` 补偿当前批次提交前后测量基准产生的整体位移。
 
 ```tsx
 import type { TransitionPlugin } from "@codehz/auto-transition";
@@ -162,12 +162,12 @@ const floatingActionsTransition: TransitionPlugin = {
 ### 默认动画行为
 
 - **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出；当父容器使用 `right` / `bottom` 锚定并因退出而发生位移时，会自动附加平移补偿，保持离场元素的屏幕坐标稳定 (250ms ease-in)。
-- **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定而整体平移时，也会自动附加父级位移补偿 (250ms ease-in)。
+- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出；`anchorDelta` 会按同一微任务内整次提交前后的净位移统一结算，因此 replacement 式的“删旧插新”也能保持离场元素的屏幕坐标稳定 (250ms ease-in)。
+- **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定或同批次布局变更而整体平移时，也会自动附加这段批次级位移补偿 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置动画执行。
 
-如果你自定义了 `transition.exit` 或 `transition.move`，推荐把对应的 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常工作，只是在绝对定位父容器通过 `right` / `bottom` 定位的场景下不会自动获得位移补偿。
+如果你自定义了 `transition.exit` 或 `transition.move`，推荐把对应的 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常工作，只是在绝对定位父容器通过 `right` / `bottom` 定位、或同批次 replacement / reorder 导致测量基准漂移的场景下不会自动获得位移补偿。replacement 仍然保持 `exit + enter` 语义，而不是旧新元素之间的 morph。
 
 ## 许可证
 
