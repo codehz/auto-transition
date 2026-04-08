@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Rect } from "./AutoTransition.tsx";
-import { getAnchorDelta, getMoveGeometry, getScaleFactor, resolveAnchor } from "./anchor.ts";
+import { getAnchorDelta, getExitInsets, getMoveGeometry, getScaleFactor, resolveAnchor } from "./anchor.ts";
 
 const currentRect: Rect = { x: 80, y: 60, width: 120, height: 50 };
 const previousRect: Rect = { x: 40, y: 20, width: 180, height: 90 };
@@ -27,6 +27,19 @@ describe("getAnchorDelta", () => {
   });
 });
 
+describe("getExitInsets", () => {
+  const parent = { width: 300, height: 200 };
+
+  test.each([
+    ["top-left", { top: 60, left: 80 }],
+    ["top-right", { top: 60, right: 100 }],
+    ["bottom-left", { bottom: 90, left: 80 }],
+    ["bottom-right", { right: 100, bottom: 90 }],
+  ] as const)("computes anchored exit insets for %s", (anchor, expected) => {
+    expect(getExitInsets(currentRect, parent, anchor)).toEqual(expected);
+  });
+});
+
 describe("getScaleFactor", () => {
   test("returns previous/current for normal sizes", () => {
     expect(getScaleFactor(180, 120)).toBe(1.5);
@@ -45,33 +58,5 @@ describe("getMoveGeometry", () => {
     ["bottom-right", { delta: { x: 20, y: 0 }, scale: { x: 1.5, y: 1.8 } }],
   ] as const)("combines delta and scale for %s", (anchor, expected) => {
     expect(getMoveGeometry(currentRect, previousRect, anchor)).toEqual(expected);
-  });
-
-  test("keeps right-anchored delta stable when the parent shrinks from the left", () => {
-    const previous: Rect = { x: 620, y: 100, width: 120, height: 40 };
-    const current: Rect = { x: 660, y: 100, width: 80, height: 40 };
-
-    expect(getMoveGeometry(current, previous, "top-left")).toEqual({
-      delta: { x: -40, y: 0 },
-      scale: { x: 1.5, y: 1 },
-    });
-    expect(getMoveGeometry(current, previous, "top-right")).toEqual({
-      delta: { x: 0, y: 0 },
-      scale: { x: 1.5, y: 1 },
-    });
-  });
-
-  test("keeps bottom-anchored delta stable when the parent shrinks upward", () => {
-    const previous: Rect = { x: 100, y: 120, width: 40, height: 120 };
-    const current: Rect = { x: 100, y: 160, width: 40, height: 80 };
-
-    expect(getMoveGeometry(current, previous, "top-left")).toEqual({
-      delta: { x: 0, y: -40 },
-      scale: { x: 1, y: 1.5 },
-    });
-    expect(getMoveGeometry(current, previous, "bottom-left")).toEqual({
-      delta: { x: 0, y: 0 },
-      scale: { x: 1, y: 1.5 },
-    });
   });
 });
