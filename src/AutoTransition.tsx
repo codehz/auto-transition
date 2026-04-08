@@ -10,9 +10,11 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { getAnchorDelta, getExitInsets, getScaleFactor, resolveAnchor, type Anchor } from "./anchor.ts";
 import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
 import { patchActivity } from "./ActivityPatch.tsx";
+export type { Anchor } from "./anchor.ts";
 
 /**
  * A rectangle describing an element's position and size relative to the measured
@@ -43,6 +45,7 @@ export type Dimensions = {
  */
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
+  anchor?: Anchor;
   transition?: TransitionPlugin;
   patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
@@ -96,6 +99,7 @@ export type AutoTransitionProps<T extends ElementType | undefined> = T extends E
  */
 export function AutoTransition<T extends ElementType | undefined>({
   as,
+  anchor = "top-left",
   children,
   transition,
   ref: externalRef,
@@ -118,9 +122,15 @@ export function AutoTransition<T extends ElementType | undefined>({
     }
     const parentRect = microcache(() => {
       const borderBox = measureTarget.getBoundingClientRect();
+      const borderLeft = parseFloat(styles.borderLeftWidth || "0");
+      const borderRight = parseFloat(styles.borderRightWidth || "0");
+      const borderTop = parseFloat(styles.borderTopWidth || "0");
+      const borderBottom = parseFloat(styles.borderBottomWidth || "0");
       return {
-        left: borderBox.left + parseFloat(styles.borderLeftWidth || "0"),
-        top: borderBox.top + parseFloat(styles.borderTopWidth || "0"),
+        left: borderBox.left + borderLeft,
+        top: borderBox.top + borderTop,
+        width: borderBox.width - borderLeft - borderRight,
+        height: borderBox.height - borderTop - borderBottom,
       };
     });
     const snapshot = microcache(
@@ -198,22 +208,37 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.exit) {
         animation = transition.exit(node, rect);
       } else {
+        const { transformOrigin } = resolveAnchor(anchor);
+        const insets = getExitInsets(rect, parentRect(), anchor);
         const width = `${rect.width}px`;
         const height = `${rect.height}px`;
-        const translate = `translate(${rect.x}px, ${rect.y}px)`;
-        animation = node.animate(
-          {
-            position: ["absolute", "absolute"],
-            opacity: [1, 0],
-            top: ["0", "0"],
-            left: ["0", "0"],
-            transform: [translate, translate],
-            width: [width, width],
-            height: [height, height],
-            margin: ["0", "0"],
-          },
-          { duration: 250, easing: "ease-in" },
-        );
+        const startKeyframe: Keyframe = {
+          position: "absolute",
+          opacity: 1,
+          transformOrigin,
+          transform: "scale(1, 1)",
+          width,
+          height,
+          margin: "0",
+        };
+        if (insets.top !== undefined) {
+          startKeyframe.top = `${insets.top}px`;
+        }
+        if (insets.right !== undefined) {
+          startKeyframe.right = `${insets.right}px`;
+        }
+        if (insets.bottom !== undefined) {
+          startKeyframe.bottom = `${insets.bottom}px`;
+        }
+        if (insets.left !== undefined) {
+          startKeyframe.left = `${insets.left}px`;
+        }
+        const endKeyframe: Keyframe = {
+          ...startKeyframe,
+          opacity: 0,
+          transform: "scale(0.96, 0.96)",
+        };
+        animation = node.animate([startKeyframe, endKeyframe], { duration: 250, easing: "ease-in" });
       }
       animation.finished.then(() => node.remove());
       return animation;
@@ -223,7 +248,15 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.enter) {
         transition.enter(node);
       } else {
-        node.animate({ opacity: [0, 1] }, { duration: 250, easing: "ease-out" });
+        const { transformOrigin } = resolveAnchor(anchor);
+        node.animate(
+          {
+            opacity: [0, 1],
+            transformOrigin: [transformOrigin, transformOrigin],
+            transform: ["scale(0.96, 0.96)", "scale(1, 1)"],
+          },
+          { duration: 250, easing: "ease-out" },
+        );
       }
     }
 
@@ -231,14 +264,14 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (transition?.move) {
         transition.move(node, rect, oldRect);
       } else {
-        const dx = oldRect.x - rect.x;
-        const dy = oldRect.y - rect.y;
-        const sx = oldRect.width / rect.width;
-        const sy = oldRect.height / rect.height;
+        const { transformOrigin } = resolveAnchor(anchor);
+        const delta = getAnchorDelta(rect, oldRect, anchor);
+        const sx = getScaleFactor(oldRect.width, rect.width);
+        const sy = getScaleFactor(oldRect.height, rect.height);
         node.animate(
           {
-            transformOrigin: ["0 0", "0 0"],
-            transform: [`translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, `translate(0, 0) scale(1, 1)`],
+            transformOrigin: [transformOrigin, transformOrigin],
+            transform: [`translate(${delta.x}px, ${delta.y}px) scale(${sx}, ${sy})`, "translate(0, 0) scale(1, 1)"],
           },
           { duration: 250, easing: "ease-in" },
         );
@@ -254,7 +287,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         height: rect.height,
       };
     }
-  }, [patch, transition]);
+  }, [anchor, patch, transition]);
   const forkedRef = useForkRef(ref, externalRef);
   return (
     <Component ref={forkedRef} {...rest}>

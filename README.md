@@ -9,8 +9,9 @@
 - **全自动动画**：自动识别子元素的添加、删除和位置变化并应用动画。
 - **高性能**：基于原生 Web Animations API 实现，确保流畅的 160fps 体验。
 - **布局感知**：自动计算元素在容器内的相对位置，支持平滑的位移和缩放过渡。
+- **锚点感知**：可显式指定 `anchor`，让右侧/底部悬浮容器中的动画仍然自然贴边。
 - **高度可定制**：支持通过插件系统自定义动画效果。
-- **无侵入性**：支持 `asChild` 属性（类似 Radix UI），可无缝集成到现有布局中。
+- **无侵入性**：支持通过 `Slot` 将行为附着到现有布局节点。
 
 ## 安装
 
@@ -46,17 +47,40 @@ function ListExample() {
 }
 ```
 
+对于右下角悬浮容器这类场景，可以显式指定锚点方向：
+
+```tsx
+import { AutoTransition } from "@codehz/auto-transition";
+
+function FloatingActions({ actions }: { actions: string[] }) {
+  return (
+    <div style={{ position: "fixed", right: 24, bottom: 24 }}>
+      <AutoTransition
+        as="div"
+        anchor="bottom-right"
+        style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12 }}
+      >
+        {actions.map((action) => (
+          <button key={action}>{action}</button>
+        ))}
+      </AutoTransition>
+    </div>
+  );
+}
+```
+
 ## API 参考
 
 ### `AutoTransition` 组件 Props
 
-| 属性       | 类型               | 默认值       | 说明                                                |
-| :--------- | :----------------- | :----------- | :-------------------------------------------------- |
-| `as`       | `ElementType`      | `div`        | 容器渲染成的 HTML 标签或组件。                      |
-| `asChild`  | `boolean`          | `false`      | 是否使用 `Slot` 模式，将 props 转发给唯一的子元素。 |
-| `plugin`   | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画的插件对象。          |
-| `children` | `ReactNode`        | -            | 需要应用动画的子元素。                              |
-| `ref`      | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                         |
+| 属性         | 类型                                                           | 默认值       | 说明                                                                    |
+| :----------- | :------------------------------------------------------------- | :----------- | :---------------------------------------------------------------------- |
+| `as`         | `ElementType`                                                  | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。       |
+| `anchor`     | `"top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | `top-left`   | 控制内置动画围绕哪个角做位移、缩放和退出定位。                          |
+| `transition` | `TransitionPlugin`                                             | 内置默认动画 | 用于自定义进入、退出和移动动画的插件对象。                              |
+| `patch`      | `boolean`                                                      | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。 |
+| `children`   | `ReactNode`                                                    | -            | 需要应用动画的子元素。                                                  |
+| `ref`        | `Ref<HTMLElement>`                                             | -            | 转发给容器 DOM 元素的引用。                                             |
 
 ### `TransitionPlugin` 接口
 
@@ -75,9 +99,11 @@ export type TransitionPlugin = {
 
 ### 默认动画行为
 
-- **Enter**: 透明度从 0 到 1 (250ms ease-out)。
-- **Exit**: 保持当前位置和大小，透明度从 1 到 0 (250ms ease-in)，动画结束后从 DOM 移除。
-- **Move**: 使用 FLIP 进行位移和缩放补偿，实现平滑的布局切换 (250ms ease-in)。
+- **Enter**: 围绕 `anchor` 做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
+- **Exit**: 按 `anchor` 冻结元素的绝对定位，做轻微 anchored scale + fade-out，动画结束后从 DOM 移除 (250ms ease-in)。
+- **Move**: 使用锚点感知 FLIP，位移和缩放都围绕声明的角进行补偿 (250ms ease-in)。
+
+如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置锚点动画执行。
 
 ## 许可证
 
