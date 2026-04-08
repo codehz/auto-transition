@@ -46,18 +46,6 @@ export type ParentBounds = {
   height: number;
 };
 
-export type Insets = {
-  top: number;
-  right: number;
-  bottom: number;
-  left: number;
-};
-
-export type ExitAnchor = {
-  horizontal: "left" | "right";
-  vertical: "top" | "bottom";
-};
-
 export type MoveGeometry = {
   delta: Point;
   scale: {
@@ -77,8 +65,6 @@ export type EnterTransitionContext = TransitionBaseContext & {
 
 export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
-  insets: Insets;
-  anchor: ExitAnchor;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
@@ -95,17 +81,11 @@ export type TransitionPlugin = {
 };
 
 const DEFAULT_TRANSFORM_ORIGIN = "50% 50%";
-const DEFAULT_EXIT_ANCHOR: ExitAnchor = {
-  horizontal: "left",
-  vertical: "top",
-};
 
 type MeasuredParentRect = ParentBounds & {
   left: number;
   top: number;
 };
-
-type ExitLayout = Pick<ExitTransitionContext, "anchor" | "insets">;
 
 /**
  * Common props for `AutoTransition`.
@@ -132,19 +112,8 @@ export function buildEnterContext(element: Element, rect: Rect, parent: ParentBo
   return { element, rect, parent };
 }
 
-export function buildExitContext(
-  element: Element,
-  rect: Rect,
-  parent: ParentBounds,
-  layout: Partial<ExitLayout> = {},
-): ExitTransitionContext {
-  return {
-    element,
-    rect,
-    parent,
-    anchor: layout.anchor ?? DEFAULT_EXIT_ANCHOR,
-    insets: layout.insets ?? getInsets(rect, parent),
-  };
+export function buildExitContext(element: Element, rect: Rect, parent: ParentBounds): ExitTransitionContext {
+  return { element, rect, parent };
 }
 
 export function buildMoveContext(
@@ -192,19 +161,19 @@ export function defaultEnterTransition({ element }: EnterTransitionContext): Ani
   );
 }
 
-export function defaultExitTransition({ element, rect, insets, anchor }: ExitTransitionContext): Animation {
+export function defaultExitTransition({ element, rect }: ExitTransitionContext): Animation {
+  const width = `${rect.width}px`;
+  const height = `${rect.height}px`;
   const startKeyframe: Keyframe = {
     position: "absolute",
     opacity: 1,
     transformOrigin: DEFAULT_TRANSFORM_ORIGIN,
     transform: "scale(1, 1)",
-    width: `${rect.width}px`,
-    height: `${rect.height}px`,
+    width,
+    height,
     margin: "0",
-    top: anchor.vertical === "top" ? `${insets.top}px` : "auto",
-    right: anchor.horizontal === "right" ? `${insets.right}px` : "auto",
-    bottom: anchor.vertical === "bottom" ? `${insets.bottom}px` : "auto",
-    left: anchor.horizontal === "left" ? `${insets.left}px` : "auto",
+    top: `${rect.y}px`,
+    left: `${rect.x}px`,
   };
   const endKeyframe: Keyframe = {
     ...startKeyframe,
@@ -228,28 +197,6 @@ function toParentBounds(parent: MeasuredParentRect): ParentBounds {
   return {
     width: parent.width,
     height: parent.height,
-  };
-}
-
-function getInsets(rect: Rect, parent: ParentBounds): Insets {
-  return {
-    top: rect.y,
-    right: parent.width - rect.x - rect.width,
-    bottom: parent.height - rect.y - rect.height,
-    left: rect.x,
-  };
-}
-
-function resolveExitLayout(node: Element, rect: Rect, parent: ParentBounds): ExitLayout {
-  const styles = getComputedStyle(node);
-  const horizontal = styles.right !== "auto" && styles.left === "auto" ? "right" : "left";
-  const vertical = styles.bottom !== "auto" && styles.top === "auto" ? "bottom" : "top";
-  return {
-    anchor: {
-      horizontal,
-      vertical,
-    },
-    insets: getInsets(rect, parent),
   };
 }
 
@@ -400,8 +347,7 @@ export function AutoTransition<T extends ElementType | undefined>({
     };
 
     function animateNodeExit(node: Element, rect: Rect, parent: MeasuredParentRect) {
-      const parentBounds = toParentBounds(parent);
-      const context = buildExitContext(node, rect, parentBounds, resolveExitLayout(node, rect, parentBounds));
+      const context = buildExitContext(node, rect, toParentBounds(parent));
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
       animation.finished.then(() => node.remove());
       return animation;
