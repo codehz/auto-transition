@@ -83,7 +83,28 @@ export type TransitionPlugin = {
   move?(ctx: MoveTransitionContext): Animation;
 };
 
+export type TransitionKeyframes<Ctx> =
+  | Keyframe[]
+  | PropertyIndexedKeyframes
+  | ((ctx: Ctx) => Keyframe[] | PropertyIndexedKeyframes);
+
+export type TransitionTiming<Ctx> = KeyframeAnimationOptions | ((ctx: Ctx) => KeyframeAnimationOptions);
+
+export type TransitionPhaseRecipe<Ctx> = {
+  keyframes: TransitionKeyframes<Ctx>;
+  options?: TransitionTiming<Ctx>;
+};
+
+export type TransitionRecipe = {
+  enter?: TransitionPhaseRecipe<EnterTransitionContext>;
+  exit?: TransitionPhaseRecipe<ExitTransitionContext>;
+  move?: TransitionPhaseRecipe<MoveTransitionContext>;
+};
+
+export type TransitionLike = TransitionPlugin | TransitionRecipe;
+
 const DEFAULT_TRANSFORM_ORIGIN = "50% 50%";
+const DEFAULT_MOVE_TRANSFORM_ORIGIN = "0 0";
 
 type MeasuredParentRect = ParentBounds & {
   left: number;
@@ -97,7 +118,7 @@ type MeasuredParentRect = ParentBounds & {
  */
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
-  transition?: TransitionPlugin;
+  transition?: TransitionLike;
   patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
 };
@@ -171,56 +192,278 @@ export function getMoveGeometry(current: Rect, previous: Rect): MoveGeometry {
   };
 }
 
-export function defaultEnterTransition({ element }: EnterTransitionContext): Animation {
-  return element.animate(
-    {
-      opacity: [0, 1],
-      transformOrigin: [DEFAULT_TRANSFORM_ORIGIN, DEFAULT_TRANSFORM_ORIGIN],
-      transform: ["scale(0.96, 0.96)", "scale(1, 1)"],
-    },
-    { duration: 250, easing: "ease-out" },
+type ScaleValue = number | MoveGeometry["scale"];
+
+type EnterFadeScaleOptions = {
+  duration?: number;
+  easing?: string;
+  fromOpacity?: number;
+  toOpacity?: number;
+  fromScale?: ScaleValue;
+  endScale?: ScaleValue;
+  fromTranslate?: Point;
+  toTranslate?: Point;
+  transformOrigin?: string;
+};
+
+type ExitAbsoluteFadeScaleOptions = {
+  duration?: number;
+  easing?: string;
+  fromOpacity?: number;
+  toOpacity?: number;
+  fromScale?: ScaleValue;
+  endScale?: ScaleValue;
+  includeAnchorDelta?: boolean;
+  transformOrigin?: string;
+};
+
+type MoveFlipOptions = {
+  duration?: number;
+  easing?: string;
+  includeAnchorDelta?: boolean;
+  includeScale?: boolean;
+  transformOrigin?: string;
+};
+
+function toScale(value: ScaleValue | undefined, fallback: number): MoveGeometry["scale"] {
+  if (typeof value === "number") {
+    return { x: value, y: value };
+  }
+  if (value) {
+    return value;
+  }
+  return { x: fallback, y: fallback };
+}
+
+function isZeroPoint(point: Point | undefined): boolean {
+  return !point || (point.x === 0 && point.y === 0);
+}
+
+function formatTranslate(point: Point): string {
+  if (point.x === 0 && point.y === 0) {
+    return "translate(0, 0)";
+  }
+  return `translate(${point.x}px, ${point.y}px)`;
+}
+
+function formatScale(scale: MoveGeometry["scale"]): string {
+  return `scale(${scale.x}, ${scale.y})`;
+}
+
+function buildTransform({
+  translate,
+  scale,
+  includeTranslateWhenZero = false,
+  includeScaleWhenIdentity = true,
+}: {
+  translate?: Point;
+  scale?: MoveGeometry["scale"];
+  includeTranslateWhenZero?: boolean;
+  includeScaleWhenIdentity?: boolean;
+}): string {
+  const parts: string[] = [];
+
+  if (translate && (includeTranslateWhenZero || !isZeroPoint(translate))) {
+    parts.push(formatTranslate(translate));
+  }
+
+  if (scale && (includeScaleWhenIdentity || scale.x !== 1 || scale.y !== 1)) {
+    parts.push(formatScale(scale));
+  }
+
+  return parts.join(" ");
+}
+
+function resolveTransitionKeyframes<Ctx>(
+  keyframes: TransitionKeyframes<Ctx>,
+  ctx: Ctx,
+): Keyframe[] | PropertyIndexedKeyframes {
+  return typeof keyframes === "function" ? keyframes(ctx) : keyframes;
+}
+
+function resolveTransitionOptions<Ctx>(
+  options: TransitionTiming<Ctx> | undefined,
+  ctx: Ctx,
+): KeyframeAnimationOptions | undefined {
+  return typeof options === "function" ? options(ctx) : options;
+}
+
+function createTransitionAnimation<Ctx extends TransitionBaseContext>(
+  ctx: Ctx,
+  recipe: TransitionPhaseRecipe<Ctx>,
+): Animation {
+  return ctx.element.animate(
+    resolveTransitionKeyframes(recipe.keyframes, ctx),
+    resolveTransitionOptions(recipe.options, ctx),
   );
 }
 
-export function defaultExitTransition({ element, rect, anchorDelta }: ExitTransitionContext): Animation {
-  const width = `${rect.width}px`;
-  const height = `${rect.height}px`;
-  const startTransform = getExitTransform(anchorDelta, 1);
-  const endTransform = getExitTransform(anchorDelta, 0.96);
-  const startKeyframe: Keyframe = {
-    position: "absolute",
-    opacity: 1,
-    transformOrigin: DEFAULT_TRANSFORM_ORIGIN,
-    transform: startTransform,
-    width,
-    height,
-    margin: "0",
-    top: `${rect.y}px`,
-    left: `${rect.x}px`,
-  };
-  const endKeyframe: Keyframe = {
-    ...startKeyframe,
-    opacity: 0,
-    transform: endTransform,
-  };
-  return element.animate([startKeyframe, endKeyframe], { duration: 250, easing: "ease-in" });
+function compileTransitionPhase<Ctx extends TransitionBaseContext>(
+  recipe: TransitionPhaseRecipe<Ctx> | undefined,
+): ((ctx: Ctx) => Animation) | undefined {
+  if (!recipe) {
+    return undefined;
+  }
+  return (ctx: Ctx) => createTransitionAnimation(ctx, recipe);
 }
 
-export function defaultMoveTransition({ element, delta, anchorDelta, scale }: MoveTransitionContext): Animation {
-  const compensatedDelta = {
-    x: delta.x + anchorDelta.x,
-    y: delta.y + anchorDelta.y,
+export function defineTransition(recipe: TransitionRecipe): TransitionPlugin {
+  return {
+    enter: compileTransitionPhase(recipe.enter),
+    exit: compileTransitionPhase(recipe.exit),
+    move: compileTransitionPhase(recipe.move),
   };
-  return element.animate(
-    {
-      transformOrigin: ["0 0", "0 0"],
-      transform: [
-        `translate(${compensatedDelta.x}px, ${compensatedDelta.y}px) scale(${scale.x}, ${scale.y})`,
-        "translate(0, 0) scale(1, 1)",
-      ],
+}
+
+function isTransitionRecipe(transition: TransitionLike): transition is TransitionRecipe {
+  for (const phase of [transition.enter, transition.exit, transition.move]) {
+    if (phase == null) continue;
+    return typeof phase !== "function";
+  }
+  return true;
+}
+
+function normalizeTransition(transition: TransitionLike | undefined): TransitionPlugin | undefined {
+  if (!transition) {
+    return undefined;
+  }
+  return isTransitionRecipe(transition) ? defineTransition(transition) : transition;
+}
+
+export const transitionPresets = {
+  enter: {
+    fadeScale({
+      duration = 250,
+      easing = "ease-out",
+      fromOpacity = 0,
+      toOpacity = 1,
+      fromScale = 0.96,
+      endScale = 1,
+      fromTranslate,
+      toTranslate,
+      transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
+    }: EnterFadeScaleOptions = {}): TransitionPhaseRecipe<EnterTransitionContext> {
+      return {
+        keyframes: {
+          opacity: [fromOpacity, toOpacity],
+          transformOrigin: [transformOrigin, transformOrigin],
+          transform: [
+            buildTransform({
+              translate: fromTranslate,
+              scale: toScale(fromScale, 1),
+            }),
+            buildTransform({
+              translate: toTranslate,
+              scale: toScale(endScale, 1),
+            }),
+          ],
+        },
+        options: { duration, easing },
+      };
     },
-    { duration: 250, easing: "ease-in" },
-  );
+  },
+  exit: {
+    absoluteFadeScale({
+      duration = 250,
+      easing = "ease-in",
+      fromOpacity = 1,
+      toOpacity = 0,
+      fromScale = 1,
+      endScale = 0.96,
+      includeAnchorDelta = true,
+      transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
+    }: ExitAbsoluteFadeScaleOptions = {}): TransitionPhaseRecipe<ExitTransitionContext> {
+      return {
+        keyframes: ({ rect, anchorDelta }) => {
+          const width = `${rect.width}px`;
+          const height = `${rect.height}px`;
+          const translate = includeAnchorDelta ? anchorDelta : undefined;
+          const startKeyframe: Keyframe = {
+            position: "absolute",
+            opacity: fromOpacity,
+            transformOrigin,
+            transform: buildTransform({
+              translate,
+              scale: toScale(fromScale, 1),
+            }),
+            width,
+            height,
+            margin: "0",
+            top: `${rect.y}px`,
+            left: `${rect.x}px`,
+          };
+
+          return [
+            startKeyframe,
+            {
+              ...startKeyframe,
+              opacity: toOpacity,
+              transform: buildTransform({
+                translate,
+                scale: toScale(endScale, 1),
+              }),
+            },
+          ];
+        },
+        options: { duration, easing },
+      };
+    },
+  },
+  move: {
+    flip({
+      duration = 250,
+      easing = "ease-in",
+      includeAnchorDelta = true,
+      includeScale = true,
+      transformOrigin = DEFAULT_MOVE_TRANSFORM_ORIGIN,
+    }: MoveFlipOptions = {}): TransitionPhaseRecipe<MoveTransitionContext> {
+      return {
+        keyframes: ({ delta, anchorDelta, scale }) => {
+          const compensatedDelta = {
+            x: delta.x + (includeAnchorDelta ? anchorDelta.x : 0),
+            y: delta.y + (includeAnchorDelta ? anchorDelta.y : 0),
+          };
+
+          return {
+            transformOrigin: [transformOrigin, transformOrigin],
+            transform: [
+              buildTransform({
+                translate: compensatedDelta,
+                scale: includeScale ? scale : undefined,
+                includeTranslateWhenZero: true,
+                includeScaleWhenIdentity: includeScale,
+              }),
+              buildTransform({
+                translate: { x: 0, y: 0 },
+                scale: includeScale ? { x: 1, y: 1 } : undefined,
+                includeTranslateWhenZero: true,
+                includeScaleWhenIdentity: includeScale,
+              }),
+            ],
+          };
+        },
+        options: { duration, easing },
+      };
+    },
+  },
+} as const;
+
+const defaultTransition = defineTransition({
+  enter: transitionPresets.enter.fadeScale(),
+  exit: transitionPresets.exit.absoluteFadeScale(),
+  move: transitionPresets.move.flip(),
+});
+
+export function defaultEnterTransition(ctx: EnterTransitionContext): Animation {
+  return defaultTransition.enter!(ctx);
+}
+
+export function defaultExitTransition(ctx: ExitTransitionContext): Animation {
+  return defaultTransition.exit!(ctx);
+}
+
+export function defaultMoveTransition(ctx: MoveTransitionContext): Animation {
+  return defaultTransition.move!(ctx);
 }
 
 function toParentBounds(parent: MeasuredParentRect): ParentBounds {
@@ -237,14 +480,6 @@ function getViewportRect(rect: DOMRectReadOnly): Rect {
     width: rect.width,
     height: rect.height,
   };
-}
-
-function getExitTransform(anchorDelta: Point, scale: number): string {
-  const scaleTransform = `scale(${scale}, ${scale})`;
-  if (anchorDelta.x === 0 && anchorDelta.y === 0) {
-    return scaleTransform;
-  }
-  return `translate(${anchorDelta.x}px, ${anchorDelta.y}px) ${scaleTransform}`;
 }
 
 type SnapshotState = BatchSnapshot<Element>;
@@ -358,6 +593,7 @@ export function AutoTransition<T extends ElementType | undefined>({
   const ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
+    const resolvedTransition = normalizeTransition(transition);
     const exiting = new Set<Element>();
     let batch: BatchState | null = null;
     const target = ref.current!;
@@ -529,7 +765,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       },
     ) {
       const context = buildExitContext(node, rect, toParentBounds(parent), options);
-      const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
+      const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
       const finalize = () => {
         exiting.delete(node);
         if (node.parentNode === target) {
@@ -544,7 +780,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       const currentParent = parent ?? measureParentRect();
       const currentRect = rect ?? getRelativePosition(node, currentParent);
       const context = buildEnterContext(node, currentRect, toParentBounds(currentParent));
-      return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
+      return resolvedTransition?.enter ? resolvedTransition.enter(context) : defaultEnterTransition(context);
     }
 
     function animateNodeMove(
@@ -557,7 +793,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       },
     ) {
       const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent), options);
-      return transition?.move ? transition.move(context) : defaultMoveTransition(context);
+      return resolvedTransition?.move ? resolvedTransition.move(context) : defaultMoveTransition(context);
     }
 
     function getRelativePosition(node: Element, parent = measureParentRect()): Rect {

@@ -50,17 +50,83 @@ function ListExample() {
 
 ### `AutoTransition` 组件 Props
 
-| 属性         | 类型               | 默认值       | 说明                                                                    |
-| :----------- | :----------------- | :----------- | :---------------------------------------------------------------------- |
-| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。       |
-| `transition` | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画的插件对象。                              |
-| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。 |
-| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                  |
-| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                             |
+| 属性         | 类型               | 默认值       | 说明                                                                              |
+| :----------- | :----------------- | :----------- | :-------------------------------------------------------------------------------- |
+| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                 |
+| `transition` | `TransitionLike`   | 内置默认动画 | 用于自定义进入、退出和移动动画；支持旧版 `TransitionPlugin` 和新版声明式 recipe。 |
+| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。           |
+| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                            |
+| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                       |
 
-### `TransitionPlugin` 接口
+### 推荐写法：`TransitionRecipe`
 
-你可以通过实现此接口来自定义动画：
+如果你只是想快速定制常见的 enter / exit / move 动画，推荐直接使用声明式 recipe 和内置 presets：
+
+```tsx
+import { AutoTransition, transitionPresets, type TransitionRecipe } from "@codehz/auto-transition";
+
+const floatingActionsTransition = {
+  enter: transitionPresets.enter.fadeScale({
+    duration: 220,
+    fromTranslate: { x: 0, y: 8 },
+  }),
+  exit: transitionPresets.exit.absoluteFadeScale({
+    duration: 200,
+  }),
+  move: transitionPresets.move.flip({
+    duration: 220,
+  }),
+} satisfies TransitionRecipe;
+
+function Example({ children }: { children: React.ReactNode }) {
+  return <AutoTransition transition={floatingActionsTransition}>{children}</AutoTransition>;
+}
+```
+
+`transitionPresets` 目前提供三组常用工厂：
+
+- `transitionPresets.enter.fadeScale(options?)`
+- `transitionPresets.exit.absoluteFadeScale(options?)`
+- `transitionPresets.move.flip(options?)`
+
+其中：
+
+- `exit.absoluteFadeScale()` 会自动处理退出元素的绝对定位 keyframes，并默认合并 `anchorDelta`。
+- `move.flip()` 会自动使用 `ctx.delta + ctx.anchorDelta`，默认附带缩放补偿；可通过 `includeScale: false` 关闭缩放。
+
+如果你想显式地把 recipe 编译成旧接口，也可以使用 `defineTransition(recipe)`；传给 `transition` 时两种写法行为一致。
+
+```ts
+import { defineTransition } from "@codehz/auto-transition";
+
+const compiled = defineTransition(floatingActionsTransition);
+```
+
+对应的类型如下：
+
+```ts
+type TransitionKeyframes<Ctx> =
+  | Keyframe[]
+  | PropertyIndexedKeyframes
+  | ((ctx: Ctx) => Keyframe[] | PropertyIndexedKeyframes);
+
+type TransitionTiming<Ctx> = KeyframeAnimationOptions | ((ctx: Ctx) => KeyframeAnimationOptions);
+
+type TransitionPhaseRecipe<Ctx> = {
+  keyframes: TransitionKeyframes<Ctx>;
+  options?: TransitionTiming<Ctx>;
+};
+
+type TransitionRecipe = {
+  enter?: TransitionPhaseRecipe<EnterTransitionContext>;
+  exit?: TransitionPhaseRecipe<ExitTransitionContext>;
+  move?: TransitionPhaseRecipe<MoveTransitionContext>;
+};
+```
+
+### 兼容写法：`TransitionPlugin`
+
+如果你需要完全控制 `Animation` 对象，旧版函数式插件接口仍然完全可用：
 
 ```typescript
 type TransitionBaseContext = {
@@ -165,7 +231,7 @@ const floatingActionsTransition: TransitionPlugin = {
 - **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出；`anchorDelta` 会按同一微任务内整次提交前后的净位移统一结算，因此 replacement 式的“删旧插新”也能保持离场元素的屏幕坐标稳定 (250ms ease-in)。
 - **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定或同批次布局变更而整体平移时，也会自动附加这段批次级位移补偿 (250ms ease-in)。
 
-如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置动画执行。
+如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 或 recipe phase 会优先于内置动画执行。
 
 如果你自定义了 `transition.exit` 或 `transition.move`，推荐把对应的 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常工作，只是在绝对定位父容器通过 `right` / `bottom` 定位、或同批次 replacement / reorder 导致测量基准漂移的场景下不会自动获得位移补偿。replacement 仍然保持 `exit + enter` 语义，而不是旧新元素之间的 morph。
 

@@ -3,14 +3,17 @@ import {
   buildEnterContext,
   buildExitContext,
   buildMoveContext,
+  defaultEnterTransition,
   defaultExitTransition,
   defaultMoveTransition,
+  defineTransition,
   getMoveGeometry,
   getScaleFactor,
   type ParentBounds,
   type Point,
   type Rect,
   type TransitionPlugin,
+  transitionPresets,
 } from "./AutoTransition.tsx";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 
@@ -20,6 +23,18 @@ const currentRect: Rect = { x: 80, y: 60, width: 120, height: 50 };
 const previousRect: Rect = { x: 40, y: 20, width: 180, height: 90 };
 const viewportRect: Rect = { x: 180, y: 160, width: 120, height: 50 };
 const anchorDelta: Point = { x: 48, y: 36 };
+
+function createAnimatedElement() {
+  const calls: { keyframes: Keyframe[] | PropertyIndexedKeyframes | null; options: KeyframeAnimationOptions }[] = [];
+  const animatedElement = {
+    animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
+      calls.push({ keyframes, options: options ?? {} });
+      return { finished: Promise.resolve() } as unknown as Animation;
+    },
+  } as unknown as Element;
+
+  return { animatedElement, calls };
+}
 
 describe("buildExitContext", () => {
   test("keeps element geometry relative to the measured parent", () => {
@@ -96,6 +111,22 @@ describe("TransitionPlugin contexts", () => {
     plugin.move?.(buildMoveContext(element, currentRect, previousRect, parent, { anchorDelta }));
 
     expect(seen).toEqual(["enter", "exit", "move"]);
+  });
+});
+
+describe("defaultEnterTransition", () => {
+  test("keeps the previous fade-scale output", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+
+    defaultEnterTransition(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      opacity: [0, 1],
+      transformOrigin: ["50% 50%", "50% 50%"],
+      transform: ["scale(0.96, 0.96)", "scale(1, 1)"],
+    });
+    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-out" });
   });
 });
 
@@ -197,6 +228,88 @@ describe("defaultMoveTransition", () => {
       transformOrigin: ["0 0", "0 0"],
       transform: ["translate(8px, -4px) scale(1.5, 1.8)", "translate(0, 0) scale(1, 1)"],
     });
+  });
+});
+
+describe("defineTransition", () => {
+  test("compiles declarative recipes into transition plugins", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPresets.enter.fadeScale({
+        duration: 180,
+        easing: "linear",
+        fromTranslate: { x: 0, y: 12 },
+      }),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls).toEqual([
+      {
+        keyframes: {
+          opacity: [0, 1],
+          transformOrigin: ["50% 50%", "50% 50%"],
+          transform: ["translate(0px, 12px) scale(0.96, 0.96)", "scale(1, 1)"],
+        },
+        options: { duration: 180, easing: "linear" },
+      },
+    ]);
+  });
+
+  test("absolute exit preset automatically includes anchor compensation", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      exit: transitionPresets.exit.absoluteFadeScale(),
+    });
+
+    transition.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        position: "absolute",
+        opacity: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 36px) scale(1, 1)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+      {
+        position: "absolute",
+        opacity: 0,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 36px) scale(0.96, 0.96)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+    ]);
+  });
+
+  test("flip preset can omit scale while keeping compensated motion", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      move: transitionPresets.move.flip({ includeScale: false }),
+    });
+
+    transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      transformOrigin: ["0 0", "0 0"],
+      transform: ["translate(8px, -4px)", "translate(0, 0)"],
+    });
+    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
 });
 
