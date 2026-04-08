@@ -311,6 +311,87 @@ describe("defineTransition", () => {
     });
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
+
+  test("pop preset adds an overshoot keyframe for enter", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPresets.enter.pop({
+        fromTranslate: { x: 0, y: 6 },
+      }),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      opacity: [0, 1, 1],
+      transformOrigin: ["50% 50%", "50% 50%", "50% 50%"],
+      transform: ["translate(0px, 6px) scale(0.9, 0.9)", "scale(1.03, 1.03)", "scale(1, 1)"],
+    });
+    expect(calls[0]?.options).toEqual({
+      duration: 280,
+      easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+    });
+  });
+
+  test("absolute slide fade preset combines anchor compensation with travel distance", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      exit: transitionPresets.exit.absoluteSlideFade({
+        distance: 10,
+      }),
+    });
+
+    transition.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        position: "absolute",
+        opacity: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 36px) scale(1, 1)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+      {
+        position: "absolute",
+        opacity: 0,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 26px) scale(1, 1)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+    ]);
+    expect(calls[0]?.options).toEqual({ duration: 220, easing: "ease-in" });
+  });
+
+  test("translate preset provides motion-only FLIP defaults", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      move: transitionPresets.move.translate(),
+    });
+
+    transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual({
+      transformOrigin: ["0 0", "0 0"],
+      transform: ["translate(8px, -4px)", "translate(0, 0)"],
+    });
+    expect(calls[0]?.options).toEqual({ duration: 220, easing: "ease-out" });
+  });
 });
 
 describe("geometry helpers", () => {

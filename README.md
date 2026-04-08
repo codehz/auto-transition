@@ -66,16 +66,15 @@ function ListExample() {
 import { AutoTransition, transitionPresets, type TransitionRecipe } from "@codehz/auto-transition";
 
 const floatingActionsTransition = {
-  enter: transitionPresets.enter.fadeScale({
+  enter: transitionPresets.enter.slideFade({
     duration: 220,
-    fromTranslate: { x: 0, y: 8 },
+    distance: 10,
   }),
-  exit: transitionPresets.exit.absoluteFadeScale({
+  exit: transitionPresets.exit.absoluteSlideFade({
     duration: 200,
+    distance: 10,
   }),
-  move: transitionPresets.move.flip({
-    duration: 220,
-  }),
+  move: transitionPresets.move.smooth(),
 } satisfies TransitionRecipe;
 
 function Example({ children }: { children: React.ReactNode }) {
@@ -86,13 +85,27 @@ function Example({ children }: { children: React.ReactNode }) {
 `transitionPresets` 目前提供三组常用工厂：
 
 - `transitionPresets.enter.fadeScale(options?)`
+- `transitionPresets.enter.fade(options?)`
+- `transitionPresets.enter.slideFade(options?)`
+- `transitionPresets.enter.pop(options?)`
 - `transitionPresets.exit.absoluteFadeScale(options?)`
+- `transitionPresets.exit.absoluteFade(options?)`
+- `transitionPresets.exit.absoluteSlideFade(options?)`
+- `transitionPresets.exit.absoluteShrink(options?)`
 - `transitionPresets.move.flip(options?)`
+- `transitionPresets.move.translate(options?)`
+- `transitionPresets.move.smooth(options?)`
 
 其中：
 
+- `enter.fade()` 只做透明度过渡，适合不希望缩放或位移的内容。
+- `enter.slideFade()` / `exit.absoluteSlideFade()` 支持通过 `axis`、`direction`、`distance` 快速做方向性滑入滑出。
+- `enter.pop()` 会带一个轻微 overshoot keyframe，适合按钮、标签、浮层等强调进入感的元素。
 - `exit.absoluteFadeScale()` 会自动处理退出元素的绝对定位 keyframes，并默认合并 `anchorDelta`。
+- `exit.absoluteShrink()` 是更明显一点的离场收缩预设。
 - `move.flip()` 会自动使用 `ctx.delta + ctx.anchorDelta`，默认附带缩放补偿；可通过 `includeScale: false` 关闭缩放。
+- `move.translate()` 是只保留位移补偿的轻量版 FLIP。
+- `move.smooth()` 使用更柔和的 easing 和更长的默认时长，适合卡片、面板这类需要“滑顺”感的布局变化。
 
 如果你想显式地把 recipe 编译成旧接口，也可以使用 `defineTransition(recipe)`；传给 `transition` 时两种写法行为一致。
 
