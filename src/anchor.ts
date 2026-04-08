@@ -1,4 +1,4 @@
-import type { Rect } from "./AutoTransition.tsx";
+import type { MeasuredBox, Rect } from "./AutoTransition.tsx";
 
 export type Anchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
@@ -34,6 +34,30 @@ export type MoveGeometry = {
 
 export type AnchorGeometry = AnchorAxis;
 
+function isMeasuredBox(value: Rect | MeasuredBox): value is MeasuredBox {
+  return "left" in value;
+}
+
+export function measureBox(rect: Rect, parent: ParentBounds): MeasuredBox {
+  return {
+    top: rect.y,
+    right: parent.width - rect.x - rect.width,
+    bottom: parent.height - rect.y - rect.height,
+    left: rect.x,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+export function rectFromBox(box: MeasuredBox): Rect {
+  return {
+    x: box.left,
+    y: box.top,
+    width: box.width,
+    height: box.height,
+  };
+}
+
 export function resolveAnchor(anchor: Anchor): AnchorGeometry {
   switch (anchor) {
     case "top-right":
@@ -48,15 +72,21 @@ export function resolveAnchor(anchor: Anchor): AnchorGeometry {
   }
 }
 
-export function getAnchorPoint(rect: Rect, anchor: Anchor): AnchorPoint {
+export function getAnchorPoint(rect: Rect | MeasuredBox, anchor: Anchor): AnchorPoint {
   const geometry = resolveAnchor(anchor);
+  if (isMeasuredBox(rect)) {
+    return {
+      x: geometry.x === "left" ? rect.left : -rect.right,
+      y: geometry.y === "top" ? rect.top : -rect.bottom,
+    };
+  }
   return {
     x: geometry.x === "left" ? rect.x : rect.x + rect.width,
     y: geometry.y === "top" ? rect.y : rect.y + rect.height,
   };
 }
 
-export function getAnchorDelta(current: Rect, previous: Rect, anchor: Anchor): AnchorPoint {
+export function getAnchorDelta(current: Rect | MeasuredBox, previous: Rect | MeasuredBox, anchor: Anchor): AnchorPoint {
   const currentPoint = getAnchorPoint(current, anchor);
   const previousPoint = getAnchorPoint(previous, anchor);
   return {
@@ -69,7 +99,11 @@ export function getScaleFactor(previous: number, current: number): number {
   return current === 0 ? 1 : previous / current;
 }
 
-export function getMoveGeometry(current: Rect, previous: Rect, anchor: Anchor): MoveGeometry {
+export function getMoveGeometry(
+  current: Rect | MeasuredBox,
+  previous: Rect | MeasuredBox,
+  anchor: Anchor,
+): MoveGeometry {
   return {
     delta: getAnchorDelta(current, previous, anchor),
     scale: {
@@ -79,12 +113,23 @@ export function getMoveGeometry(current: Rect, previous: Rect, anchor: Anchor): 
   };
 }
 
-export function getExitInsets(rect: Rect, parent: ParentBounds, anchor: Anchor): ExitInsets {
+export function getExitInsets(box: MeasuredBox, anchor: Anchor): ExitInsets;
+export function getExitInsets(rect: Rect, parent: ParentBounds, anchor: Anchor): ExitInsets;
+export function getExitInsets(
+  rectOrBox: Rect | MeasuredBox,
+  parentOrAnchor: ParentBounds | Anchor,
+  maybeAnchor?: Anchor,
+): ExitInsets {
+  const box =
+    maybeAnchor === undefined
+      ? (rectOrBox as MeasuredBox)
+      : measureBox(rectOrBox as Rect, parentOrAnchor as ParentBounds);
+  const anchor = (maybeAnchor ?? parentOrAnchor) as Anchor;
   const geometry = resolveAnchor(anchor);
   return {
-    top: geometry.y === "top" ? rect.y : undefined,
-    right: geometry.x === "right" ? parent.width - rect.x - rect.width : undefined,
-    bottom: geometry.y === "bottom" ? parent.height - rect.y - rect.height : undefined,
-    left: geometry.x === "left" ? rect.x : undefined,
+    top: geometry.y === "top" ? box.top : undefined,
+    right: geometry.x === "right" ? box.right : undefined,
+    bottom: geometry.y === "bottom" ? box.bottom : undefined,
+    left: geometry.x === "left" ? box.left : undefined,
   };
 }

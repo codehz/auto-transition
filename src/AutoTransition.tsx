@@ -13,6 +13,8 @@ import {
 import {
   getExitInsets,
   getMoveGeometry,
+  measureBox,
+  rectFromBox,
   type Anchor,
   type AnchorPoint,
   type ExitInsets,
@@ -20,7 +22,6 @@ import {
   type ParentBounds,
 } from "./anchor.ts";
 import { patchActivity } from "./ActivityPatch.tsx";
-import { microcache } from "./microcache.ts";
 import { useForkRef } from "./useForkRef.ts";
 
 export type { Anchor, AnchorPoint, ExitInsets, MoveGeometry, ParentBounds } from "./anchor.ts";
@@ -35,6 +36,21 @@ export type { Anchor, AnchorPoint, ExitInsets, MoveGeometry, ParentBounds } from
 export type Rect = {
   x: number;
   y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Complete element box measured against the active measurement parent.
+ *
+ * - `top`/`left`/`right`/`bottom` are offsets to each content-box edge.
+ * - `width`/`height` are the element's layout size in pixels.
+ */
+export type MeasuredBox = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
   width: number;
   height: number;
 };
@@ -55,16 +71,24 @@ export type TransitionBaseContext = {
 
 export type EnterTransitionContext = TransitionBaseContext & {
   rect: Rect;
+  box: MeasuredBox;
 };
 
 export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
+  box: MeasuredBox;
+  beforeBox: MeasuredBox;
+  beforeParent: ParentBounds;
   insets: ExitInsets;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
   current: Rect;
   previous: Rect;
+  currentBox: MeasuredBox;
+  previousBox: MeasuredBox;
+  currentParent: ParentBounds;
+  previousParent: ParentBounds;
   delta: AnchorPoint;
   scale: MoveGeometry["scale"];
 };
@@ -80,6 +104,24 @@ const DEFAULT_TRANSFORM_ORIGIN = "50% 50%";
 type MeasuredParentRect = ParentBounds & {
   left: number;
   top: number;
+};
+
+type ViewportRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+type NodeMeasurement = {
+  rect: Rect;
+  box: MeasuredBox;
+  viewport: ViewportRect;
+};
+
+type LayoutSnapshot = {
+  parent: MeasuredParentRect;
+  nodes: Map<Element, NodeMeasurement>;
 };
 
 /**
@@ -109,8 +151,9 @@ export function buildEnterContext(
   rect: Rect,
   anchor: Anchor,
   parent: ParentBounds,
+  box = measureBox(rect, parent),
 ): EnterTransitionContext {
-  return { element, rect, anchor, parent };
+  return { element, rect, box, anchor, parent };
 }
 
 export function buildExitContext(
@@ -118,13 +161,24 @@ export function buildExitContext(
   rect: Rect,
   anchor: Anchor,
   parent: ParentBounds,
+  options?: {
+    box?: MeasuredBox;
+    beforeBox?: MeasuredBox;
+    beforeParent?: ParentBounds;
+  },
 ): ExitTransitionContext {
+  const box = options?.box ?? measureBox(rect, parent);
+  const beforeBox = options?.beforeBox ?? box;
+  const beforeParent = options?.beforeParent ?? parent;
   return {
     element,
     rect,
+    box,
+    beforeBox,
+    beforeParent,
     anchor,
     parent,
-    insets: getExitInsets(rect, parent, anchor),
+    insets: getExitInsets(box, anchor),
   };
 }
 
@@ -134,14 +188,28 @@ export function buildMoveContext(
   previous: Rect,
   anchor: Anchor,
   parent: ParentBounds,
+  options?: {
+    currentBox?: MeasuredBox;
+    previousBox?: MeasuredBox;
+    currentParent?: ParentBounds;
+    previousParent?: ParentBounds;
+  },
 ): MoveTransitionContext {
-  const geometry = getMoveGeometry(current, previous, anchor);
+  const currentBox = options?.currentBox ?? measureBox(current, options?.currentParent ?? parent);
+  const previousBox = options?.previousBox ?? measureBox(previous, options?.previousParent ?? parent);
+  const currentParent = options?.currentParent ?? parent;
+  const previousParent = options?.previousParent ?? parent;
+  const geometry = getMoveGeometry(currentBox, previousBox, anchor);
   return {
     element,
     anchor,
     parent,
     current,
     previous,
+    currentBox,
+    previousBox,
+    currentParent,
+    previousParent,
     delta: geometry.delta,
     scale: geometry.scale,
   };
@@ -158,9 +226,9 @@ export function defaultEnterTransition({ element }: EnterTransitionContext): Ani
   );
 }
 
-export function defaultExitTransition({ element, rect, insets }: ExitTransitionContext): Animation {
-  const width = `${rect.width}px`;
-  const height = `${rect.height}px`;
+export function defaultExitTransition({ element, box, insets }: ExitTransitionContext): Animation {
+  const width = `${box.width}px`;
+  const height = `${box.height}px`;
   const startKeyframe: Keyframe = {
     position: "absolute",
     opacity: 1,
@@ -205,6 +273,30 @@ function toParentBounds(parent: MeasuredParentRect): ParentBounds {
     width: parent.width,
     height: parent.height,
   };
+}
+
+function toViewportRect(rect: DOMRect): ViewportRect {
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function projectViewportRectToBox(viewport: ViewportRect, parent: MeasuredParentRect): MeasuredBox {
+  const rect: Rect = {
+    x: viewport.left - parent.left,
+    y: viewport.top - parent.top,
+    width: viewport.width,
+    height: viewport.height,
+  };
+  return measureBox(rect, toParentBounds(parent));
+}
+
+function hasMeaningfulMove(current: MeasuredBox, previous: MeasuredBox, anchor: Anchor): boolean {
+  const geometry = getMoveGeometry(current, previous, anchor);
+  return geometry.delta.x !== 0 || geometry.delta.y !== 0 || geometry.scale.x !== 1 || geometry.scale.y !== 1;
 }
 
 /**
@@ -257,7 +349,15 @@ export function AutoTransition<T extends ElementType | undefined>({
   const ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const removed = new Set<Element>();
+    const exiting = new Set<Element>();
+    const pendingExit = new Map<
+      Element,
+      {
+        before: NodeMeasurement;
+        beforeParent: MeasuredParentRect;
+      }
+    >();
+    const pendingEnter = new Set<Element>();
     const target = ref.current!;
     if (patch) {
       patchActivity(target);
@@ -270,81 +370,94 @@ export function AutoTransition<T extends ElementType | undefined>({
       styles = getComputedStyle(measureTarget);
     }
 
-    const parentRect = microcache((): MeasuredParentRect => {
+    let beforeSnapshot: LayoutSnapshot | null = null;
+    let flushScheduled = false;
+
+    function parentRect(): MeasuredParentRect {
+      const measurementStyles = getComputedStyle(measureTarget);
       const borderBox = measureTarget.getBoundingClientRect();
-      const borderLeft = parseFloat(styles.borderLeftWidth || "0");
-      const borderRight = parseFloat(styles.borderRightWidth || "0");
-      const borderTop = parseFloat(styles.borderTopWidth || "0");
-      const borderBottom = parseFloat(styles.borderBottomWidth || "0");
+      const borderLeft = parseFloat(measurementStyles.borderLeftWidth || "0");
+      const borderRight = parseFloat(measurementStyles.borderRightWidth || "0");
+      const borderTop = parseFloat(measurementStyles.borderTopWidth || "0");
+      const borderBottom = parseFloat(measurementStyles.borderBottomWidth || "0");
       return {
         left: borderBox.left + borderLeft,
         top: borderBox.top + borderTop,
         width: borderBox.width - borderLeft - borderRight,
         height: borderBox.height - borderTop - borderBottom,
       };
-    });
+    }
 
-    const snapshot = microcache(
-      () => {
-        const parent = parentRect();
-        const result = new Map<Element, Rect>();
-        for (const child of target.children) {
-          if (child instanceof Element) {
-            result.set(child, getRelativePosition(child, parent));
-          }
-        }
-        return result;
-      },
-      (old) => {
-        const parent = parentRect();
-        for (const child of target.children) {
-          if (child instanceof Element) {
-            if (removed.has(child)) continue;
-            const rect = getRelativePosition(child, parent);
-            const oldRect = old.get(child);
-            if (!oldRect) continue;
-            if (
-              rect.x !== oldRect.x ||
-              rect.y !== oldRect.y ||
-              rect.width !== oldRect.width ||
-              rect.height !== oldRect.height
-            ) {
-              animateNodeMove(child, rect, oldRect, parent);
-            }
-          }
-        }
-      },
-    );
+    function captureNode(node: Element, parent = parentRect()): NodeMeasurement {
+      const viewport = toViewportRect(node.getBoundingClientRect());
+      const rect: Rect = {
+        x: viewport.left - parent.left,
+        y: viewport.top - parent.top,
+        width: viewport.width,
+        height: viewport.height,
+      };
+      return {
+        rect,
+        box: measureBox(rect, toParentBounds(parent)),
+        viewport,
+      };
+    }
+
+    function captureSnapshot(): LayoutSnapshot {
+      const parent = parentRect();
+      const nodes = new Map<Element, NodeMeasurement>();
+      for (const child of target.children) {
+        if (!(child instanceof Element) || exiting.has(child)) continue;
+        nodes.set(child, captureNode(child, parent));
+      }
+      return { parent, nodes };
+    }
+
+    function ensureBeforeSnapshot() {
+      if (!beforeSnapshot) {
+        beforeSnapshot = captureSnapshot();
+      }
+      if (!flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flushMutations);
+      }
+    }
 
     target.removeChild = function removeChild<T extends Node>(node: T) {
+      ensureBeforeSnapshot();
       if (node instanceof Element) {
-        if (removed.has(node)) return node;
-        removed.add(node);
-        const parent = parentRect();
-        const rect = snapshot().get(node) ?? getRelativePosition(node, parent);
-        animateNodeExit(node, rect, parent);
+        if (exiting.has(node)) return node;
+        const measurement = beforeSnapshot?.nodes.get(node) ?? captureNode(node);
+        const snapshotParent = beforeSnapshot?.parent ?? parentRect();
+        pendingEnter.delete(node);
+        prepareNodeForExit(node, measurement.box);
+        exiting.add(node);
+        pendingExit.set(node, {
+          before: measurement,
+          beforeParent: snapshotParent,
+        });
         return node;
       }
       return Element.prototype.removeChild.call(this, node) as T;
     };
 
     target.insertBefore = function insertBefore<T extends Node>(node: T, child: Node | null) {
-      snapshot();
+      ensureBeforeSnapshot();
       if (!(node instanceof Element)) {
         return Element.prototype.insertBefore.call(this, node, child) as T;
       }
       Element.prototype.insertBefore.call(this, node, child);
-      animateNodeEnter(node);
+      pendingEnter.add(node);
       return node;
     };
 
     target.appendChild = function appendChild<T extends Node>(node: T) {
-      snapshot();
+      ensureBeforeSnapshot();
       if (!(node instanceof Element)) {
         return Element.prototype.appendChild.call(this, node) as T;
       }
       Element.prototype.appendChild.call(this, node);
-      animateNodeEnter(node);
+      pendingEnter.add(node);
       return node;
     };
 
@@ -354,33 +467,95 @@ export function AutoTransition<T extends ElementType | undefined>({
       target.appendChild = Element.prototype.appendChild;
     };
 
-    function animateNodeExit(node: Element, rect: Rect, parent: MeasuredParentRect) {
-      const context = buildExitContext(node, rect, anchor, toParentBounds(parent));
+    function flushMutations() {
+      flushScheduled = false;
+      const previous = beforeSnapshot;
+      beforeSnapshot = null;
+      if (!previous) return;
+
+      const current = captureSnapshot();
+
+      for (const child of target.children) {
+        if (!(child instanceof Element) || exiting.has(child)) continue;
+        const currentMeasurement = current.nodes.get(child);
+        if (!currentMeasurement) continue;
+        const previousMeasurement = previous.nodes.get(child);
+        if (previousMeasurement && hasMeaningfulMove(currentMeasurement.box, previousMeasurement.box, anchor)) {
+          animateNodeMove(child, currentMeasurement, previousMeasurement, current.parent, previous.parent);
+          continue;
+        }
+        if (pendingEnter.has(child)) {
+          animateNodeEnter(child, currentMeasurement, current.parent);
+        }
+      }
+
+      for (const [node, exitState] of pendingExit) {
+        animateNodeExit(node, exitState.before, exitState.beforeParent, current.parent);
+      }
+
+      pendingEnter.clear();
+      pendingExit.clear();
+    }
+
+    function prepareNodeForExit(node: Element, box: MeasuredBox) {
+      const element = node as HTMLElement | SVGElement;
+      element.style.position = "absolute";
+      element.style.top = `${box.top}px`;
+      element.style.left = `${box.left}px`;
+      element.style.right = "auto";
+      element.style.bottom = "auto";
+      element.style.width = `${box.width}px`;
+      element.style.height = `${box.height}px`;
+      element.style.margin = "0";
+    }
+
+    function animateNodeExit(
+      node: Element,
+      before: NodeMeasurement,
+      beforeParent: MeasuredParentRect,
+      parent: MeasuredParentRect,
+    ) {
+      const box = projectViewportRectToBox(before.viewport, parent);
+      const rect = rectFromBox(box);
+      const context = buildExitContext(node, rect, anchor, toParentBounds(parent), {
+        box,
+        beforeBox: before.box,
+        beforeParent: toParentBounds(beforeParent),
+      });
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
-      animation.finished.then(() => node.remove());
+      animation.finished.finally(() => {
+        exiting.delete(node);
+        node.remove();
+      });
       return animation;
     }
 
-    function animateNodeEnter(node: Element) {
-      const parent = parentRect();
-      const rect = getRelativePosition(node, parent);
-      const context = buildEnterContext(node, rect, anchor, toParentBounds(parent));
+    function animateNodeEnter(node: Element, measurement: NodeMeasurement, parent: MeasuredParentRect) {
+      const context = buildEnterContext(node, measurement.rect, anchor, toParentBounds(parent), measurement.box);
       return transition?.enter ? transition.enter(context) : defaultEnterTransition(context);
     }
 
-    function animateNodeMove(node: Element, rect: Rect, oldRect: Rect, parent: MeasuredParentRect) {
-      const context = buildMoveContext(node, rect, oldRect, anchor, toParentBounds(parent));
+    function animateNodeMove(
+      node: Element,
+      measurement: NodeMeasurement,
+      previousMeasurement: NodeMeasurement,
+      parent: MeasuredParentRect,
+      previousParent: MeasuredParentRect,
+    ) {
+      const context = buildMoveContext(
+        node,
+        measurement.rect,
+        previousMeasurement.rect,
+        anchor,
+        toParentBounds(parent),
+        {
+          currentBox: measurement.box,
+          previousBox: previousMeasurement.box,
+          currentParent: toParentBounds(parent),
+          previousParent: toParentBounds(previousParent),
+        },
+      );
       return transition?.move ? transition.move(context) : defaultMoveTransition(context);
-    }
-
-    function getRelativePosition(node: Element, parent = parentRect()): Rect {
-      const rect = node.getBoundingClientRect();
-      return {
-        x: rect.left - parent.left,
-        y: rect.top - parent.top,
-        width: rect.width,
-        height: rect.height,
-      };
     }
   }, [anchor, patch, transition]);
 
