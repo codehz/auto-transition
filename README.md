@@ -68,12 +68,26 @@ type TransitionBaseContext = {
   parent: ParentBounds;
 };
 
+type Insets = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+};
+
+type ExitAnchor = {
+  horizontal: "left" | "right";
+  vertical: "top" | "bottom";
+};
+
 type EnterTransitionContext = TransitionBaseContext & {
   rect: Rect;
 };
 
 type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
+  insets: Insets;
+  anchor: ExitAnchor;
 };
 
 type MoveTransitionContext = TransitionBaseContext & {
@@ -93,11 +107,11 @@ export type TransitionPlugin = {
 };
 ```
 
-`move` 的 `ctx.delta` 和 `ctx.scale` 已经按标准 FLIP 几何预计算好了，自定义插件不需要再重复计算位移和缩放。
+`move` 的 `ctx.delta` 和 `ctx.scale` 已经按标准 FLIP 几何预计算好了，自定义插件不需要再重复计算位移和缩放。`exit` 的 `ctx.insets` 和 `ctx.anchor` 则保留了元素退出前的物理定位语义，适合处理 `absolute + right/bottom` 的场景。
 
 ### 自定义插件示例
 
-下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置。
+下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.anchor` 和 `ctx.insets` 冻结元素原本的定位边。
 
 ```tsx
 import type { TransitionPlugin } from "@codehz/auto-transition";
@@ -112,26 +126,30 @@ const floatingActionsTransition: TransitionPlugin = {
       { duration: 220, easing: "ease-out" },
     );
   },
-  exit({ element, rect }) {
+  exit({ element, rect, insets, anchor }) {
     return element.animate(
       [
         {
           position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
           width: `${rect.width}px`,
           height: `${rect.height}px`,
           margin: "0",
+          top: anchor.vertical === "top" ? `${insets.top}px` : "auto",
+          right: anchor.horizontal === "right" ? `${insets.right}px` : "auto",
+          bottom: anchor.vertical === "bottom" ? `${insets.bottom}px` : "auto",
+          left: anchor.horizontal === "left" ? `${insets.left}px` : "auto",
           opacity: 1,
           transform: "scale(1)",
         },
         {
           position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
           width: `${rect.width}px`,
           height: `${rect.height}px`,
           margin: "0",
+          top: anchor.vertical === "top" ? `${insets.top}px` : "auto",
+          right: anchor.horizontal === "right" ? `${insets.right}px` : "auto",
+          bottom: anchor.vertical === "bottom" ? `${insets.bottom}px` : "auto",
+          left: anchor.horizontal === "left" ? `${insets.left}px` : "auto",
           opacity: 0,
           transform: "scale(0.96)",
         },
@@ -156,7 +174,7 @@ const floatingActionsTransition: TransitionPlugin = {
 ### 默认动画行为
 
 - **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
+- **Exit**: 冻结元素当前的绝对定位，并保留原始 `left/right`、`top/bottom` 锚点，做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
 - **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置动画执行。
