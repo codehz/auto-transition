@@ -74,6 +74,8 @@ type EnterTransitionContext = TransitionBaseContext & {
 
 type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
+  viewportRect: Rect;
+  anchorDelta: Point;
 };
 
 type MoveTransitionContext = TransitionBaseContext & {
@@ -97,7 +99,7 @@ export type TransitionPlugin = {
 
 ### 自定义插件示例
 
-下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置。
+下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置，并通过 `ctx.anchorDelta` 补偿父容器因为 `right` / `bottom` 锚定而产生的整体位移。
 
 ```tsx
 import type { TransitionPlugin } from "@codehz/auto-transition";
@@ -112,7 +114,10 @@ const floatingActionsTransition: TransitionPlugin = {
       { duration: 220, easing: "ease-out" },
     );
   },
-  exit({ element, rect }) {
+  exit({ element, rect, anchorDelta }) {
+    const translate =
+      anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
+
     return element.animate(
       [
         {
@@ -123,7 +128,7 @@ const floatingActionsTransition: TransitionPlugin = {
           height: `${rect.height}px`,
           margin: "0",
           opacity: 1,
-          transform: "scale(1)",
+          transform: `${translate}scale(1)`,
         },
         {
           position: "absolute",
@@ -133,7 +138,7 @@ const floatingActionsTransition: TransitionPlugin = {
           height: `${rect.height}px`,
           margin: "0",
           opacity: 0,
-          transform: "scale(0.96)",
+          transform: `${translate}scale(0.96)`,
         },
       ],
       { duration: 200, easing: "ease-in" },
@@ -156,10 +161,12 @@ const floatingActionsTransition: TransitionPlugin = {
 ### 默认动画行为
 
 - **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
+- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出；当父容器使用 `right` / `bottom` 锚定并因退出而发生位移时，会自动附加平移补偿，保持离场元素的屏幕坐标稳定 (250ms ease-in)。
 - **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置动画执行。
+
+如果你自定义了 `transition.exit`，推荐把 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常退出，只是在绝对定位父容器通过 `right` / `bottom` 定位的场景下不会自动获得位移补偿。
 
 ## 许可证
 

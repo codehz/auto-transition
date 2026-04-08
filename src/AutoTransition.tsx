@@ -65,6 +65,8 @@ export type EnterTransitionContext = TransitionBaseContext & {
 
 export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
+  viewportRect: Rect;
+  anchorDelta: Point;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
@@ -112,8 +114,22 @@ export function buildEnterContext(element: Element, rect: Rect, parent: ParentBo
   return { element, rect, parent };
 }
 
-export function buildExitContext(element: Element, rect: Rect, parent: ParentBounds): ExitTransitionContext {
-  return { element, rect, parent };
+export function buildExitContext(
+  element: Element,
+  rect: Rect,
+  parent: ParentBounds,
+  options: {
+    viewportRect?: Rect;
+    anchorDelta?: Point;
+  } = {},
+): ExitTransitionContext {
+  return {
+    element,
+    rect,
+    parent,
+    viewportRect: options.viewportRect ?? rect,
+    anchorDelta: options.anchorDelta ?? { x: 0, y: 0 },
+  };
 }
 
 export function buildMoveContext(
@@ -161,14 +177,16 @@ export function defaultEnterTransition({ element }: EnterTransitionContext): Ani
   );
 }
 
-export function defaultExitTransition({ element, rect }: ExitTransitionContext): Animation {
+export function defaultExitTransition({ element, rect, anchorDelta }: ExitTransitionContext): Animation {
   const width = `${rect.width}px`;
   const height = `${rect.height}px`;
+  const startTransform = getExitTransform(anchorDelta, 1);
+  const endTransform = getExitTransform(anchorDelta, 0.96);
   const startKeyframe: Keyframe = {
     position: "absolute",
     opacity: 1,
     transformOrigin: DEFAULT_TRANSFORM_ORIGIN,
-    transform: "scale(1, 1)",
+    transform: startTransform,
     width,
     height,
     margin: "0",
@@ -178,7 +196,7 @@ export function defaultExitTransition({ element, rect }: ExitTransitionContext):
   const endKeyframe: Keyframe = {
     ...startKeyframe,
     opacity: 0,
-    transform: "scale(0.96, 0.96)",
+    transform: endTransform,
   };
   return element.animate([startKeyframe, endKeyframe], { duration: 250, easing: "ease-in" });
 }
@@ -198,6 +216,46 @@ function toParentBounds(parent: MeasuredParentRect): ParentBounds {
     width: parent.width,
     height: parent.height,
   };
+}
+
+function getViewportRect(rect: DOMRectReadOnly): Rect {
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function getExitAnchorDelta(
+  previousParent: Pick<MeasuredParentRect, "left" | "top">,
+  nextParent: Pick<MeasuredParentRect, "left" | "top">,
+): Point {
+  return {
+    x: previousParent.left - nextParent.left,
+    y: previousParent.top - nextParent.top,
+  };
+}
+
+function getExitTransform(anchorDelta: Point, scale: number): string {
+  const scaleTransform = `scale(${scale}, ${scale})`;
+  if (anchorDelta.x === 0 && anchorDelta.y === 0) {
+    return scaleTransform;
+  }
+  return `translate(${anchorDelta.x}px, ${anchorDelta.y}px) ${scaleTransform}`;
+}
+
+function lockNodeForExit(node: Element, rect: Rect) {
+  const style = (node as HTMLElement).style;
+  style.position = "absolute";
+  style.top = `${rect.y}px`;
+  style.left = `${rect.x}px`;
+  style.right = "auto";
+  style.bottom = "auto";
+  style.width = `${rect.width}px`;
+  style.height = `${rect.height}px`;
+  style.margin = "0";
+  style.pointerEvents = "none";
 }
 
 /**
@@ -262,19 +320,22 @@ export function AutoTransition<T extends ElementType | undefined>({
       styles = getComputedStyle(measureTarget);
     }
 
-    const parentRect = microcache((): MeasuredParentRect => {
+    function measureParentRect(): MeasuredParentRect {
       const borderBox = measureTarget.getBoundingClientRect();
-      const borderLeft = parseFloat(styles.borderLeftWidth || "0");
-      const borderRight = parseFloat(styles.borderRightWidth || "0");
-      const borderTop = parseFloat(styles.borderTopWidth || "0");
-      const borderBottom = parseFloat(styles.borderBottomWidth || "0");
+      const currentStyles = getComputedStyle(measureTarget);
+      const borderLeft = parseFloat(currentStyles.borderLeftWidth || "0");
+      const borderRight = parseFloat(currentStyles.borderRightWidth || "0");
+      const borderTop = parseFloat(currentStyles.borderTopWidth || "0");
+      const borderBottom = parseFloat(currentStyles.borderBottomWidth || "0");
       return {
         left: borderBox.left + borderLeft,
         top: borderBox.top + borderTop,
         width: borderBox.width - borderLeft - borderRight,
         height: borderBox.height - borderTop - borderBottom,
       };
-    });
+    }
+
+    const parentRect = microcache((): MeasuredParentRect => measureParentRect());
 
     const snapshot = microcache(
       () => {
@@ -312,9 +373,13 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (node instanceof Element) {
         if (removed.has(node)) return node;
         removed.add(node);
-        const parent = parentRect();
-        const rect = snapshot().get(node) ?? getRelativePosition(node, parent);
-        animateNodeExit(node, rect, parent);
+        const previousParent = measureParentRect();
+        const rect = snapshot().get(node) ?? getRelativePosition(node, previousParent);
+        const viewportRect = getViewportRect(node.getBoundingClientRect());
+        lockNodeForExit(node, rect);
+        const nextParent = measureParentRect();
+        const anchorDelta = getExitAnchorDelta(previousParent, nextParent);
+        animateNodeExit(node, rect, previousParent, { viewportRect, anchorDelta });
         return node;
       }
       return Element.prototype.removeChild.call(this, node) as T;
@@ -346,10 +411,24 @@ export function AutoTransition<T extends ElementType | undefined>({
       target.appendChild = Element.prototype.appendChild;
     };
 
-    function animateNodeExit(node: Element, rect: Rect, parent: MeasuredParentRect) {
-      const context = buildExitContext(node, rect, toParentBounds(parent));
+    function animateNodeExit(
+      node: Element,
+      rect: Rect,
+      parent: MeasuredParentRect,
+      options?: {
+        viewportRect?: Rect;
+        anchorDelta?: Point;
+      },
+    ) {
+      const context = buildExitContext(node, rect, toParentBounds(parent), options);
       const animation = transition?.exit ? transition.exit(context) : defaultExitTransition(context);
-      animation.finished.then(() => node.remove());
+      const finalize = () => {
+        removed.delete(node);
+        if (node.parentNode === target) {
+          Element.prototype.removeChild.call(target, node);
+        }
+      };
+      animation.finished.then(finalize).catch(finalize);
       return animation;
     }
 
