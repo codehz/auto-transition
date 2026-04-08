@@ -9,7 +9,7 @@
 - **全自动动画**：自动识别子元素的添加、删除和位置变化并应用动画。
 - **高性能**：基于原生 Web Animations API 实现，确保流畅的 160fps 体验。
 - **布局感知**：自动计算元素在容器内的相对位置，支持平滑的位移和缩放过渡。
-- **锚点感知**：可显式指定 `anchor`，按对应边做位置测量，让右侧/底部悬浮容器中的移动和退出动画仍然自然贴边。
+- **锚点感知**：可显式指定 `anchor`，让右侧/底部悬浮容器中的移动和退出动画仍然自然贴边。
 - **高度可定制**：支持通过插件系统自定义动画效果，插件可直接读取锚点感知的几何上下文。
 - **无侵入性**：支持通过 `Slot` 将行为附着到现有布局节点。
 
@@ -76,7 +76,7 @@ function FloatingActions({ actions }: { actions: string[] }) {
 | 属性         | 类型                                                           | 默认值       | 说明                                                                    |
 | :----------- | :------------------------------------------------------------- | :----------- | :---------------------------------------------------------------------- |
 | `as`         | `ElementType`                                                  | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。       |
-| `anchor`     | `"top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | `top-left`   | 控制位置测量时采用哪组边，不影响默认动画的 `transform-origin`。         |
+| `anchor`     | `"top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | `top-left`   | 控制内置动画的位移补偿和退出定位。                                      |
 | `transition` | `TransitionPlugin`                                             | 内置默认动画 | 用于自定义进入、退出和移动动画的插件对象。                              |
 | `patch`      | `boolean`                                                      | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。 |
 | `children`   | `ReactNode`                                                    | -            | 需要应用动画的子元素。                                                  |
@@ -87,15 +87,6 @@ function FloatingActions({ actions }: { actions: string[] }) {
 你可以通过实现此接口来自定义动画：
 
 ```typescript
-type MeasuredBox = {
-  top: number;
-  right: number;
-  bottom: number;
-  left: number;
-  width: number;
-  height: number;
-};
-
 type TransitionBaseContext = {
   element: Element;
   anchor: Anchor;
@@ -104,24 +95,16 @@ type TransitionBaseContext = {
 
 type EnterTransitionContext = TransitionBaseContext & {
   rect: Rect;
-  box: MeasuredBox;
 };
 
 type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
-  box: MeasuredBox;
-  beforeBox: MeasuredBox;
-  beforeParent: ParentBounds;
   insets: ExitInsets;
 };
 
 type MoveTransitionContext = TransitionBaseContext & {
   current: Rect;
   previous: Rect;
-  currentBox: MeasuredBox;
-  previousBox: MeasuredBox;
-  currentParent: ParentBounds;
-  previousParent: ParentBounds;
   delta: AnchorPoint;
   scale: {
     x: number;
@@ -136,15 +119,11 @@ export type TransitionPlugin = {
 };
 ```
 
-`move` 的 `ctx.delta` / `ctx.scale`、`exit` 的 `ctx.insets` 都已经按 `anchor` 预计算好了，自定义插件不需要再手写 anchor-aware offset。
-
-`anchor` 只决定测量使用 `left/right/top/bottom` 中的哪一组边，不决定 `transform-origin`。默认 enter / exit / move 动画仍然以中心为 `transform-origin`。
-
-`exit` 的 `ctx.parent` / `ctx.rect` / `ctx.box` / `ctx.insets` 以元素已经脱流后的父容器为基准；如果你还需要脱流前的基准，可以读取 `ctx.beforeBox` 和 `ctx.beforeParent`。
+`move` 的 `ctx.delta` 和 `ctx.scale`、`exit` 的 `ctx.insets` 都已经按 `anchor` 预计算好了，自定义插件不需要再手写 anchor-aware offset。
 
 ### 自定义插件示例
 
-下面这个示例适合右下角悬浮按钮组：移动动画直接使用 `ctx.delta`，退出动画使用脱流后重新测量得到的 `ctx.insets` / `ctx.box` 固定贴边位置。
+下面这个示例适合右下角悬浮按钮组：移动动画直接使用 `ctx.delta`，退出动画直接使用 `ctx.insets` 固定贴边位置。
 
 ```tsx
 import type { TransitionPlugin } from "@codehz/auto-transition";
@@ -159,15 +138,15 @@ const floatingActionsTransition: TransitionPlugin = {
       { duration: 220, easing: "ease-out" },
     );
   },
-  exit({ element, box, insets }) {
+  exit({ element, rect, insets }) {
     return element.animate(
       [
         {
           position: "absolute",
           right: `${insets.right ?? 0}px`,
           bottom: `${insets.bottom ?? 0}px`,
-          width: `${box.width}px`,
-          height: `${box.height}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
           margin: "0",
           opacity: 1,
           transform: "scale(1)",
@@ -176,8 +155,8 @@ const floatingActionsTransition: TransitionPlugin = {
           position: "absolute",
           right: `${insets.right ?? 0}px`,
           bottom: `${insets.bottom ?? 0}px`,
-          width: `${box.width}px`,
-          height: `${box.height}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
           margin: "0",
           opacity: 0,
           transform: "scale(0.96)",
@@ -203,8 +182,8 @@ const floatingActionsTransition: TransitionPlugin = {
 ### 默认动画行为
 
 - **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 先将元素脱离文档流，再基于脱流后的父容器重新计算 `insets`，随后做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
-- **Move**: 使用锚点感知 FLIP，通过基于 `anchor` 测量边的位移补偿配合缩放过渡 (250ms ease-in)。
+- **Exit**: 按 `anchor` 冻结元素的绝对定位，做轻微中心缩放和淡出，动画结束后从 DOM 移除 (250ms ease-in)。
+- **Move**: 使用锚点感知 FLIP，通过基于 `anchor` 的位移补偿配合缩放过渡 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 会优先于内置锚点动画执行。
 
