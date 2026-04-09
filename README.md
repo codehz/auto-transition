@@ -50,26 +50,35 @@ function ListExample() {
 
 ### `AutoTransition` 组件 Props
 
-| 属性         | 类型               | 默认值       | 说明                                                                                       |
-| :----------- | :----------------- | :----------- | :----------------------------------------------------------------------------------------- |
-| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                          |
-| `transition` | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或声明式 recipe，也支持混搭。 |
-| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                    |
-| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                                     |
-| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                                |
+| 属性         | 类型               | 默认值       | 说明                                                                                            |
+| :----------- | :----------------- | :----------- | :---------------------------------------------------------------------------------------------- |
+| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                               |
+| `transition` | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或 effect 组合式定义，也支持混搭。 |
+| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                         |
+| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                                          |
+| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                                     |
 
 ### 推荐写法：`TransitionPlugin`
 
-如果你只是想快速定制常见的 enter / exit / move 动画，推荐直接使用内置 presets；现在也可以在同一个对象里把 recipe 和函数式 phase 混搭：
+新版推荐把动画拆成可组合的 effect，再用 phase 工厂拼成 enter / exit / move。这样 `fade`、`scale`、`blur`、`slide`、FLIP 补偿都可以自由组合，不需要继续堆 `fadeScaleBlurSlide...` 这类预设名。
 
 ```tsx
-import { AutoTransition, transitionPresets, type TransitionPlugin } from "@codehz/auto-transition";
+import {
+  AutoTransition,
+  defineTransition,
+  transitionEffects,
+  transitionPhases,
+  type TransitionPlugin,
+} from "@codehz/auto-transition";
 
-const floatingActionsTransition = {
-  enter: transitionPresets.enter.slideFade({
-    duration: 220,
-    distance: 10,
-  }),
+const floatingActionsTransition = defineTransition({
+  enter: transitionPhases.enter(
+    transitionEffects.common.fade({ from: 0, to: 1 }),
+    transitionEffects.common.scale({ from: 0.96, to: 1 }),
+    transitionEffects.common.blur({ from: "8px", to: "0px" }),
+    transitionEffects.enter.slide({ axis: "y", distance: 10 }),
+    { duration: 220, easing: "ease-out" },
+  ),
   exit({ element, rect, anchorDelta }) {
     const translate =
       anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
@@ -100,15 +109,49 @@ const floatingActionsTransition = {
       { duration: 200, easing: "ease-in" },
     );
   },
-  move: transitionPresets.move.smooth(),
-} satisfies TransitionPlugin;
+  move: transitionPhases.move(transitionEffects.move.flipTranslate(), transitionEffects.move.flipScale(), {
+    duration: 320,
+    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+  }),
+} satisfies TransitionPlugin);
 
 function Example({ children }: { children: React.ReactNode }) {
   return <AutoTransition transition={floatingActionsTransition}>{children}</AutoTransition>;
 }
 ```
 
-`transitionPresets` 目前提供三组常用工厂：
+可组合 API 分成两层：
+
+- `transitionEffects.common.fade(options?)`
+- `transitionEffects.common.scale(options?)`
+- `transitionEffects.common.blur(options?)`
+- `transitionEffects.enter.slide(options?)`
+- `transitionEffects.exit.anchorTranslate(options?)`
+- `transitionEffects.move.flipTranslate(options?)`
+- `transitionEffects.move.flipScale(options?)`
+- `transitionPhases.enter(...effects, options?)`
+- `transitionPhases.exit.absolute(...effects, options?)`
+- `transitionPhases.move(...effects, options?)`
+
+其中：
+
+- `transitionEffects.common.fade()` 负责 opacity 时间线，值会相对元素当前 opacity 缩放。
+- `transitionEffects.common.scale()` 负责结构化的 `transform.scale`，会自动输出固定顺序的 transform 字符串。
+- `transitionEffects.common.blur()` 首版封装 `filter: blur(...)`，后续可以自然扩到更多 filter 片段。
+- `transitionEffects.enter.slide()` 负责进入时的位移片段。
+- `transitionEffects.exit.anchorTranslate()` 负责退出时的 `anchorDelta` 补偿，也可附带额外滑出距离。
+- `transitionEffects.move.flipTranslate()` / `flipScale()` 把 FLIP 的位移补偿和缩放补偿拆成两个独立 effect。
+- `transitionPhases.exit.absolute()` 会自动注入退出时需要的绝对定位 keyframe 基座，effect 只关注视觉属性本身。
+
+effect 合并规则：
+
+- 所有效果的 `offset` 会取并集并按升序输出。
+- 中间缺失值会沿用最近一次已知值；起点和终点缺失时，会分别用首个和末个已知值补齐。
+- `transform` 固定按 `translate -> scale` 合成。
+- `filter` 当前固定按 `blur()` 合成。
+- 两个 effect 不能同时控制同一个原子字段，例如 `opacity`、`transform.scale`、`filter.blur`；冲突会直接抛错。
+
+`transitionPresets` 仍然保留，作为新组合 API 之上的薄封装，适合快速使用常见动画：
 
 - `transitionPresets.enter.fadeScale(options?)`
 - `transitionPresets.enter.fade(options?)`
@@ -145,21 +188,34 @@ const compiled = defineTransition(floatingActionsTransition);
 对应的类型如下：
 
 ```ts
-type TransitionKeyframes<Ctx> =
-  | Keyframe[]
-  | PropertyIndexedKeyframes
-  | ((ctx: Ctx) => Keyframe[] | PropertyIndexedKeyframes);
-
 type TransitionTiming<Ctx> = KeyframeAnimationOptions | ((ctx: Ctx) => KeyframeAnimationOptions);
 
-type TransitionPhaseRecipe<Ctx> = {
-  keyframes: TransitionKeyframes<Ctx>;
-  options?: TransitionTiming<Ctx>;
+type EffectFrame = {
+  offset: number;
+  opacity?: number;
+  transform?: {
+    translate?: Point;
+    scale?: { x: number; y: number };
+  };
+  filter?: {
+    blur?: string;
+  };
+  transformOrigin?: string;
+  style?: Partial<Keyframe>;
 };
 
 type TransitionPhaseHandler<Ctx> = (ctx: Ctx) => Animation;
 
-type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseRecipe<Ctx>;
+type TransitionEffect<Ctx> = {
+  build(ctx: Ctx): EffectFrame[];
+};
+
+type TransitionPhaseDefinition<Ctx> = {
+  effects: TransitionEffect<Ctx>[];
+  options?: TransitionTiming<Ctx>;
+};
+
+type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseDefinition<Ctx>;
 
 type TransitionPlugin = {
   enter?: TransitionPhaseLike<EnterTransitionContext>;
@@ -170,7 +226,7 @@ type TransitionPlugin = {
 
 ### 兼容写法：纯函数式 `TransitionPlugin`
 
-如果你需要完全控制 `Animation` 对象，旧版函数式插件接口仍然完全可用：
+如果你需要完全控制 `Animation` 对象，函数式 phase 仍然完全可用：
 
 ```typescript
 type TransitionBaseContext = {
@@ -271,11 +327,11 @@ const floatingActionsTransition: TransitionPlugin = {
 
 ### 默认动画行为
 
-- **Enter**: 以中心做轻微缩放并从透明过渡到完全显示 (250ms ease-out)。
-- **Exit**: 冻结元素当前的绝对定位，做轻微中心缩放和淡出；`anchorDelta` 会按同一微任务内整次提交前后的净位移统一结算，因此 replacement 式的“删旧插新”也能保持离场元素的屏幕坐标稳定 (250ms ease-in)。
+- **Enter**: 默认只做透明度淡入，不附带缩放 (250ms ease-out)。
+- **Exit**: 冻结元素当前的绝对定位并淡出；`anchorDelta` 会按同一微任务内整次提交前后的净位移统一结算，因此 replacement 式的“删旧插新”也能保持离场元素的屏幕坐标稳定 (250ms ease-in)。
 - **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定或同批次布局变更而整体平移时，也会自动附加这段批次级位移补偿 (250ms ease-in)。
 
-如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 或 recipe phase 会优先于内置动画执行。
+如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 或 effect phase 会优先于内置动画执行。
 
 如果你自定义了 `transition.exit` 或 `transition.move`，推荐把对应的 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常工作，只是在绝对定位父容器通过 `right` / `bottom` 定位、或同批次 replacement / reorder 导致测量基准漂移的场景下不会自动获得位移补偿。replacement 仍然保持 `exit + enter` 语义，而不是旧新元素之间的 morph。
 

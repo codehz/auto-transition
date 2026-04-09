@@ -9,12 +9,14 @@ import {
   defineTransition,
   getMoveGeometry,
   getScaleFactor,
+  transitionEffects,
+  transitionPhases,
+  transitionPresets,
   type CompiledTransitionPlugin,
   type ParentBounds,
   type Point,
   type Rect,
   type TransitionPlugin,
-  transitionPresets,
 } from "./AutoTransition.tsx";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 
@@ -142,9 +144,10 @@ describe("defaultEnterTransition", () => {
     defaultEnterTransition(buildEnterContext(animatedElement, currentRect, parent));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      opacity: [0, 1],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      { offset: 0, opacity: 0 },
+      { offset: 1, opacity: 1 },
+    ]);
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-out" });
   });
 
@@ -156,9 +159,10 @@ describe("defaultEnterTransition", () => {
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      opacity: [0, 0.5],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      { offset: 0, opacity: 0 },
+      { offset: 1, opacity: 0.5 },
+    ]);
   });
 });
 
@@ -177,6 +181,7 @@ describe("defaultExitTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
+        offset: 0,
         position: "absolute",
         opacity: 1,
         width: "120px",
@@ -186,6 +191,7 @@ describe("defaultExitTransition", () => {
         left: "80px",
       },
       {
+        offset: 1,
         position: "absolute",
         opacity: 0,
         width: "120px",
@@ -214,6 +220,7 @@ describe("defaultExitTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
+        offset: 0,
         position: "absolute",
         opacity: 0.5,
         width: "120px",
@@ -223,6 +230,7 @@ describe("defaultExitTransition", () => {
         left: "80px",
       },
       {
+        offset: 1,
         position: "absolute",
         opacity: 0,
         width: "120px",
@@ -269,10 +277,18 @@ describe("defaultMoveTransition", () => {
     defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      transformOrigin: ["0 0", "0 0"],
-      transform: ["translate(-40px, -40px) scale(1.5, 1.8)", "translate(0, 0) scale(1, 1)"],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "0 0",
+        transform: "translate(-40px, -40px) scale(1.5, 1.8)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "0 0",
+        transform: "translate(0, 0) scale(1, 1)",
+      },
+    ]);
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
 
@@ -288,15 +304,23 @@ describe("defaultMoveTransition", () => {
     defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      transformOrigin: ["0 0", "0 0"],
-      transform: ["translate(8px, -4px) scale(1.5, 1.8)", "translate(0, 0) scale(1, 1)"],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "0 0",
+        transform: "translate(8px, -4px) scale(1.5, 1.8)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "0 0",
+        transform: "translate(0, 0) scale(1, 1)",
+      },
+    ]);
   });
 });
 
 describe("defineTransition", () => {
-  test("supports mixing recipe phases with imperative functions in one transition", () => {
+  test("supports mixing composable phases with imperative functions in one transition", () => {
     const { animatedElement, calls } = createAnimatedElement();
     const exit = (ctx: Parameters<NonNullable<CompiledTransitionPlugin["exit"]>>[0]) => {
       expect(ctx.rect).toEqual(currentRect);
@@ -330,39 +354,57 @@ describe("defineTransition", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]).toEqual({
-      keyframes: {
-        opacity: [0, 1],
-      },
+      keyframes: [
+        { offset: 0, opacity: 0 },
+        { offset: 1, opacity: 1 },
+      ],
       options: { duration: 180, easing: "ease-out" },
     });
     expect(calls[1]).toEqual({
-      keyframes: {
-        transformOrigin: ["0 0", "0 0"],
-        transform: ["translate(8px, -4px)", "translate(0, 0)"],
-      },
+      keyframes: [
+        { offset: 0, transform: "translate(8px, -4px)" },
+        { offset: 1, transform: "translate(0, 0)" },
+      ],
       options: { duration: 200, easing: "ease-out" },
     });
   });
 
-  test("compiles declarative recipes into transition plugins", () => {
+  test("compiles declarative effect phases into transition plugins", () => {
     const { animatedElement, calls } = createAnimatedElement();
     const transition = defineTransition({
-      enter: transitionPresets.enter.fadeScale({
-        duration: 180,
-        easing: "linear",
-        fromTranslate: { x: 0, y: 12 },
-      }),
+      enter: transitionPhases.enter(
+        transitionEffects.common.fade(),
+        transitionEffects.common.scale({
+          from: 0.96,
+          to: 1,
+          transformOrigin: "50% 50%",
+        }),
+        transitionEffects.enter.slide({
+          from: { x: 0, y: 12 },
+          to: { x: 0, y: 0 },
+        }),
+        { duration: 180, easing: "linear" },
+      ),
     });
 
     transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
 
     expect(calls).toEqual([
       {
-        keyframes: {
-          opacity: [0, 1],
-          transformOrigin: ["50% 50%", "50% 50%"],
-          transform: ["translate(0px, 12px) scale(0.96, 0.96)", "scale(1, 1)"],
-        },
+        keyframes: [
+          {
+            offset: 0,
+            opacity: 0,
+            transformOrigin: "50% 50%",
+            transform: "translate(0px, 12px) scale(0.96, 0.96)",
+          },
+          {
+            offset: 1,
+            opacity: 1,
+            transformOrigin: "50% 50%",
+            transform: "translate(0, 0) scale(1, 1)",
+          },
+        ],
         options: { duration: 180, easing: "linear" },
       },
     ]);
@@ -384,6 +426,7 @@ describe("defineTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
+        offset: 0,
         position: "absolute",
         opacity: 1,
         transformOrigin: "50% 50%",
@@ -395,6 +438,7 @@ describe("defineTransition", () => {
         left: "80px",
       },
       {
+        offset: 1,
         position: "absolute",
         opacity: 0,
         transformOrigin: "50% 50%",
@@ -417,10 +461,10 @@ describe("defineTransition", () => {
     transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      transformOrigin: ["0 0", "0 0"],
-      transform: ["translate(8px, -4px)", "translate(0, 0)"],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      { offset: 0, transform: "translate(8px, -4px)" },
+      { offset: 1, transform: "translate(0, 0)" },
+    ]);
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
 
@@ -435,11 +479,26 @@ describe("defineTransition", () => {
     transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      opacity: [0, 1, 1],
-      transformOrigin: ["50% 50%", "50% 50%", "50% 50%"],
-      transform: ["translate(0px, 6px) scale(0.9, 0.9)", "scale(1.03, 1.03)", "scale(1, 1)"],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        opacity: 0,
+        transformOrigin: "50% 50%",
+        transform: "translate(0px, 6px) scale(0.9, 0.9)",
+      },
+      {
+        offset: 0.7,
+        opacity: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(0px, 6px) scale(1.03, 1.03)",
+      },
+      {
+        offset: 1,
+        opacity: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(0, 0) scale(1, 1)",
+      },
+    ]);
     expect(calls[0]?.options).toEqual({
       duration: 280,
       easing: "cubic-bezier(0.16, 1, 0.3, 1)",
@@ -464,10 +523,10 @@ describe("defineTransition", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
+        offset: 0,
         position: "absolute",
         opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 36px) scale(1, 1)",
+        transform: "translate(48px, 36px)",
         width: "120px",
         height: "50px",
         margin: "0",
@@ -475,10 +534,10 @@ describe("defineTransition", () => {
         left: "80px",
       },
       {
+        offset: 1,
         position: "absolute",
         opacity: 0,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 26px) scale(1, 1)",
+        transform: "translate(48px, 26px)",
         width: "120px",
         height: "50px",
         margin: "0",
@@ -498,11 +557,230 @@ describe("defineTransition", () => {
     transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual({
-      transformOrigin: ["0 0", "0 0"],
-      transform: ["translate(8px, -4px)", "translate(0, 0)"],
-    });
+    expect(calls[0]?.keyframes).toEqual([
+      { offset: 0, transform: "translate(8px, -4px)" },
+      { offset: 1, transform: "translate(0, 0)" },
+    ]);
     expect(calls[0]?.options).toEqual({ duration: 220, easing: "ease-out" });
+  });
+});
+
+describe("transitionEffects composition", () => {
+  test("merges fade, scale, and blur into one animation", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPhases.enter(
+        transitionEffects.common.fade({ from: 0, to: 1 }),
+        transitionEffects.common.scale({ from: 0.96, to: 1 }),
+        transitionEffects.common.blur({ from: "8px", to: "0px" }),
+        { duration: 250, easing: "ease-out" },
+      ),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls).toEqual([
+      {
+        keyframes: [
+          {
+            offset: 0,
+            opacity: 0,
+            transformOrigin: "50% 50%",
+            transform: "scale(0.96, 0.96)",
+            filter: "blur(8px)",
+          },
+          {
+            offset: 1,
+            opacity: 1,
+            transformOrigin: "50% 50%",
+            transform: "scale(1, 1)",
+            filter: "blur(0px)",
+          },
+        ],
+        options: { duration: 250, easing: "ease-out" },
+      },
+    ]);
+  });
+
+  test("composes slide with scale into a single transform timeline", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPhases.enter(
+        transitionEffects.enter.slide({ axis: "x", distance: 24 }),
+        transitionEffects.common.scale({ from: 0.92, to: 1 }),
+        { duration: 210, easing: "ease-out" },
+      ),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "50% 50%",
+        transform: "translate(24px, 0px) scale(0.92, 0.92)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(0, 0) scale(1, 1)",
+      },
+    ]);
+  });
+
+  test("composes FLIP translate and scale as independent effects", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      move: transitionPhases.move(
+        transitionEffects.move.flipTranslate({ includeAnchorDelta: true }),
+        transitionEffects.move.flipScale(),
+        { duration: 260, easing: "linear" },
+      ),
+    });
+
+    transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
+
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "0 0",
+        transform: "translate(8px, -4px) scale(1.5, 1.8)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "0 0",
+        transform: "translate(0, 0) scale(1, 1)",
+      },
+    ]);
+  });
+
+  test("keeps absolute exit layout base while adding blur", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      exit: transitionPhases.exit.absolute(
+        transitionEffects.common.fade({ from: 1, to: 0 }),
+        transitionEffects.exit.anchorTranslate({ includeAnchorDelta: true }),
+        transitionEffects.common.blur({ from: "0px", to: "6px" }),
+        { duration: 230, easing: "ease-in" },
+      ),
+    });
+
+    transition.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+      }),
+    );
+
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        position: "absolute",
+        opacity: 1,
+        transform: "translate(48px, 36px)",
+        filter: "blur(0px)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+      {
+        offset: 1,
+        position: "absolute",
+        opacity: 0,
+        transform: "translate(48px, 36px)",
+        filter: "blur(6px)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+    ]);
+  });
+
+  test("fills missing frame values from the nearest surrounding keyframe", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPhases.enter(
+        transitionEffects.common.fade({
+          keyframes: [
+            { offset: 0.3, value: 0.2 },
+            { offset: 0.7, value: 1 },
+          ],
+        }),
+        transitionEffects.common.blur({
+          keyframes: [
+            { offset: 0, value: "10px" },
+            { offset: 0.5, value: "4px" },
+          ],
+        }),
+        { duration: 200, easing: "linear" },
+      ),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls[0]?.keyframes).toEqual([
+      { offset: 0, opacity: 0.2, filter: "blur(10px)" },
+      { offset: 0.3, opacity: 0.2, filter: "blur(10px)" },
+      { offset: 0.5, opacity: 0.2, filter: "blur(4px)" },
+      { offset: 0.7, opacity: 1, filter: "blur(4px)" },
+      { offset: 1, opacity: 1, filter: "blur(4px)" },
+    ]);
+  });
+
+  test("throws when two effects both control opacity", () => {
+    const compiled = defineTransition({
+      enter: transitionPhases.enter(transitionEffects.common.fade(), transitionEffects.common.fade()),
+    });
+
+    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
+      'Transition effects conflict on "opacity"',
+    );
+  });
+
+  test("throws when two effects both control transform.scale", () => {
+    const compiled = defineTransition({
+      enter: transitionPhases.enter(
+        transitionEffects.common.scale(),
+        transitionEffects.common.scale({ from: 0.9, to: 1 }),
+      ),
+    });
+
+    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
+      'Transition effects conflict on "transformOrigin"',
+    );
+  });
+
+  test("throws when two effects both control filter.blur", () => {
+    const compiled = defineTransition({
+      enter: transitionPhases.enter(transitionEffects.common.blur(), transitionEffects.common.blur({ from: "4px" })),
+    });
+
+    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
+      'Transition effects conflict on "filter.blur"',
+    );
+  });
+
+  test("uses shared phase timing for all composed effects", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      enter: transitionPhases.enter(
+        transitionEffects.common.fade(),
+        transitionEffects.common.scale(),
+        transitionEffects.common.blur(),
+        { duration: 333, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+      ),
+    });
+
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
+    expect(calls[0]?.options).toEqual({
+      duration: 333,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    });
   });
 });
 
@@ -526,9 +804,9 @@ describe("geometry helpers", () => {
 describe("planBatchAnimations", () => {
   const batchParent = { left: 0, top: 0, width: 300, height: 200 };
 
-  function createSnapshot<T>(parent: BatchSnapshot<T>["parent"], entries: Array<[T, Rect]>): BatchSnapshot<T> {
+  function createSnapshot<T>(parentRect: BatchSnapshot<T>["parent"], entries: Array<[T, Rect]>): BatchSnapshot<T> {
     return {
-      parent,
+      parent: parentRect,
       rects: new Map(entries),
     };
   }

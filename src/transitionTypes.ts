@@ -63,19 +63,36 @@ export type MoveTransitionContext = TransitionBaseContext & {
 
 export type TransitionPhaseHandler<Ctx> = (ctx: Ctx) => Animation;
 
-export type TransitionKeyframes<Ctx> =
-  | Keyframe[]
-  | PropertyIndexedKeyframes
-  | ((ctx: Ctx) => Keyframe[] | PropertyIndexedKeyframes);
-
 export type TransitionTiming<Ctx> = KeyframeAnimationOptions | ((ctx: Ctx) => KeyframeAnimationOptions);
 
-export type TransitionPhaseRecipe<Ctx> = {
-  keyframes: TransitionKeyframes<Ctx>;
+export type EffectTransform = {
+  translate?: Point;
+  scale?: MoveGeometry["scale"];
+};
+
+export type EffectFilter = {
+  blur?: string;
+};
+
+export type EffectFrame = {
+  offset: number;
+  opacity?: number;
+  transform?: EffectTransform;
+  filter?: EffectFilter;
+  transformOrigin?: string;
+  style?: Partial<Keyframe>;
+};
+
+export type TransitionEffect<Ctx> = {
+  build(ctx: Ctx): EffectFrame[];
+};
+
+export type TransitionPhaseDefinition<Ctx> = {
+  effects: TransitionEffect<Ctx>[];
   options?: TransitionTiming<Ctx>;
 };
 
-export type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseRecipe<Ctx>;
+export type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseDefinition<Ctx>;
 
 export type TransitionPlugin = {
   enter?: TransitionPhaseLike<EnterTransitionContext>;
