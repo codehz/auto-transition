@@ -131,6 +131,10 @@ export type ExitAbsoluteSlideFadeOptions = Omit<ExitAbsoluteFadeScaleOptions, "f
 };
 
 export type ExitAbsoluteShrinkOptions = ExitAbsoluteFadeScaleOptions;
+export type ExitFadeScaleOptions = ExitAbsoluteFadeScaleOptions;
+export type ExitFadeOptions = ExitAbsoluteFadeOptions;
+export type ExitSlideFadeOptions = ExitAbsoluteSlideFadeOptions;
+export type ExitShrinkOptions = ExitAbsoluteShrinkOptions;
 
 export type MoveFlipOptions = {
   duration?: number;
@@ -665,6 +669,10 @@ export const transitionPhases = {
     return createPhaseDefinition(effects, options);
   },
   exit: {
+    flow<Ctx extends ExitTransitionContext>(...args: PhaseArgument<Ctx>[]): TransitionPhaseDefinition<Ctx> {
+      const { effects, options } = splitPhaseArguments(args);
+      return createPhaseDefinition(effects, options);
+    },
     absolute<Ctx extends ExitTransitionContext>(...args: PhaseArgument<Ctx>[]): TransitionPhaseDefinition<Ctx> {
       const { effects, options } = splitPhaseArguments(args);
       return createPhaseDefinition([createAbsoluteBaseEffect() as TransitionEffect<Ctx>, ...effects], options);
@@ -820,6 +828,69 @@ export const transitionPresets = {
     },
   },
   exit: {
+    fade(options: ExitFadeOptions = {}): TransitionPhaseDefinition<ExitTransitionContext> {
+      const { duration = 250, easing = "ease-in", fromOpacity = 1, toOpacity = 0, includeAnchorDelta = true } = options;
+
+      return transitionPhases.exit.flow(
+        transitionEffects.common.fade({ from: fromOpacity, to: toOpacity }) as TransitionEffect<ExitTransitionContext>,
+        transitionEffects.exit.anchorTranslate({ includeAnchorDelta }),
+        { duration, easing },
+      );
+    },
+    fadeScale(options: ExitFadeScaleOptions = {}): TransitionPhaseDefinition<ExitTransitionContext> {
+      const {
+        duration = 250,
+        easing = "ease-in",
+        fromOpacity = 1,
+        toOpacity = 0,
+        fromScale = 1,
+        endScale = 0.96,
+        includeAnchorDelta = true,
+        transformOrigin = DEFAULT_TRANSFORM_ORIGIN,
+      } = options;
+
+      return transitionPhases.exit.flow(
+        transitionEffects.common.fade({ from: fromOpacity, to: toOpacity }) as TransitionEffect<ExitTransitionContext>,
+        transitionEffects.exit.anchorTranslate({ includeAnchorDelta }),
+        transitionEffects.common.scale({
+          from: fromScale,
+          to: endScale,
+          transformOrigin,
+        }) as TransitionEffect<ExitTransitionContext>,
+        { duration, easing },
+      );
+    },
+    slideFade(options: ExitSlideFadeOptions = {}): TransitionPhaseDefinition<ExitTransitionContext> {
+      const {
+        axis = "y",
+        direction = -1,
+        distance = 16,
+        duration = 220,
+        easing = "ease-in",
+        fromOpacity = 1,
+        toOpacity = 0,
+        includeAnchorDelta = true,
+      } = options;
+
+      return transitionPhases.exit.flow(
+        transitionEffects.common.fade({ from: fromOpacity, to: toOpacity }) as TransitionEffect<ExitTransitionContext>,
+        transitionEffects.exit.anchorTranslate({
+          includeAnchorDelta,
+          axis,
+          direction,
+          distance,
+        }),
+        { duration, easing },
+      );
+    },
+    shrink(options: ExitShrinkOptions = {}): TransitionPhaseDefinition<ExitTransitionContext> {
+      return transitionPresets.exit.fadeScale({
+        duration: 220,
+        easing: "ease-in",
+        endScale: 0.9,
+        ...options,
+      });
+    },
     absoluteFade(options: ExitAbsoluteFadeOptions = {}): TransitionPhaseDefinition<ExitTransitionContext> {
       const { duration = 250, easing = "ease-in", fromOpacity = 1, toOpacity = 0, includeAnchorDelta = true } = options;
 
@@ -924,8 +995,13 @@ export const transitionPresets = {
 
 const defaultTransition = defineTransition({
   enter: transitionPresets.enter.fade(),
-  exit: transitionPresets.exit.absoluteFade(),
   move: transitionPresets.move.flip(),
+});
+const defaultAbsoluteExit = defineTransition({
+  exit: transitionPresets.exit.absoluteFade(),
+});
+const defaultFlowExit = defineTransition({
+  exit: transitionPresets.exit.fade(),
 });
 
 export function defaultEnterTransition(ctx: EnterTransitionContext): Animation {
@@ -933,7 +1009,7 @@ export function defaultEnterTransition(ctx: EnterTransitionContext): Animation {
 }
 
 export function defaultExitTransition(ctx: ExitTransitionContext): Animation {
-  return defaultTransition.exit!(ctx);
+  return ctx.layoutMode === "flow" ? defaultFlowExit.exit!(ctx) : defaultAbsoluteExit.exit!(ctx);
 }
 
 export function defaultMoveTransition(ctx: MoveTransitionContext): Animation {

@@ -18,6 +18,7 @@ import {
   type Rect,
   type TransitionPlugin,
 } from "./AutoTransition.tsx";
+import { prepareNodeForExit, restorePreparedExitNode } from "./exitLayout.ts";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 
 const element = { id: "demo" } as unknown as Element;
@@ -59,6 +60,20 @@ function withMockedComputedOpacity(opacity: string, run: () => void) {
   }
 }
 
+type StyledTestElement = {
+  style: {
+    position: string;
+    top: string;
+    left: string;
+    right: string;
+    bottom: string;
+    width: string;
+    height: string;
+    margin: string;
+    pointerEvents: string;
+  };
+};
+
 describe("buildExitContext", () => {
   test("keeps element geometry relative to the measured parent", () => {
     const context = buildExitContext(element, currentRect, parent);
@@ -68,16 +83,88 @@ describe("buildExitContext", () => {
     expect(context.rect).toEqual(currentRect);
     expect(context.viewportRect).toEqual(currentRect);
     expect(context.anchorDelta).toEqual({ x: 0, y: 0 });
+    expect(context.layoutMode).toBe("absolute");
   });
 
-  test("keeps viewport geometry and anchor compensation when provided", () => {
+  test("keeps viewport geometry, anchor compensation, and layout mode when provided", () => {
     const context = buildExitContext(element, currentRect, parent, {
       viewportRect,
       anchorDelta,
+      layoutMode: "flow",
     });
 
     expect(context.viewportRect).toEqual(viewportRect);
     expect(context.anchorDelta).toEqual(anchorDelta);
+    expect(context.layoutMode).toBe("flow");
+  });
+});
+
+describe("prepareNodeForExit", () => {
+  test("locks and restores inline layout styles for absolute exits", () => {
+    const styledElement: StyledTestElement = {
+      style: {
+        position: "relative",
+        top: "1px",
+        left: "2px",
+        right: "3px",
+        bottom: "4px",
+        width: "50px",
+        height: "60px",
+        margin: "7px",
+        pointerEvents: "auto",
+      },
+    };
+
+    const prepared = prepareNodeForExit(styledElement as unknown as Element, currentRect, "absolute");
+
+    expect(styledElement.style).toMatchObject({
+      position: "absolute",
+      top: "60px",
+      left: "80px",
+      right: "auto",
+      bottom: "auto",
+      width: "120px",
+      height: "50px",
+      margin: "0",
+      pointerEvents: "none",
+    });
+
+    restorePreparedExitNode(styledElement as unknown as Element, prepared);
+
+    expect(styledElement.style).toMatchObject({
+      position: "relative",
+      top: "1px",
+      left: "2px",
+      right: "3px",
+      bottom: "4px",
+      width: "50px",
+      height: "60px",
+      margin: "7px",
+      pointerEvents: "auto",
+    });
+  });
+
+  test("keeps inline layout styles untouched for flow exits and same-batch reinserts", () => {
+    const style = {
+      position: "relative",
+      top: "1px",
+      left: "2px",
+      right: "3px",
+      bottom: "4px",
+      width: "50px",
+      height: "60px",
+      margin: "7px",
+      pointerEvents: "auto",
+    };
+    const styledElement: StyledTestElement = { style: { ...style } };
+
+    const prepared = prepareNodeForExit(styledElement as unknown as Element, currentRect, "flow");
+
+    expect(styledElement.style).toMatchObject(style);
+
+    restorePreparedExitNode(styledElement as unknown as Element, prepared);
+
+    expect(styledElement.style).toMatchObject(style);
   });
 });
 
@@ -199,6 +286,31 @@ describe("defaultExitTransition", () => {
         margin: "0",
         top: "60px",
         left: "80px",
+      },
+    ]);
+    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
+  });
+
+  test("switches to flow keyframes when flow exit layout is requested", () => {
+    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
+    const animatedElement = {
+      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
+        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
+        return { finished: Promise.resolve() } as unknown as Animation;
+      },
+    } as unknown as Element;
+
+    defaultExitTransition(buildExitContext(animatedElement, currentRect, parent, { layoutMode: "flow" }));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        opacity: 1,
+      },
+      {
+        offset: 1,
+        opacity: 0,
       },
     ]);
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
@@ -452,6 +564,37 @@ describe("defineTransition", () => {
     ]);
   });
 
+  test("flow exit preset keeps layout in normal flow while adding anchor compensation", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      exit: transitionPresets.exit.fadeScale(),
+    });
+
+    transition.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+        layoutMode: "flow",
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        opacity: 1,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 36px) scale(1, 1)",
+      },
+      {
+        offset: 1,
+        opacity: 0,
+        transformOrigin: "50% 50%",
+        transform: "translate(48px, 36px) scale(0.96, 0.96)",
+      },
+    ]);
+  });
+
   test("flip preset can omit scale while keeping compensated motion", () => {
     const { animatedElement, calls } = createAnimatedElement();
     const transition = defineTransition({
@@ -696,6 +839,41 @@ describe("transitionEffects composition", () => {
         margin: "0",
         top: "60px",
         left: "80px",
+      },
+    ]);
+  });
+
+  test("flow exit phase omits the absolute layout base while adding blur", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition({
+      exit: transitionPhases.exit.flow(
+        transitionEffects.common.fade({ from: 1, to: 0 }),
+        transitionEffects.exit.anchorTranslate({ includeAnchorDelta: true }),
+        transitionEffects.common.blur({ from: "0px", to: "6px" }),
+        { duration: 230, easing: "ease-in" },
+      ),
+    });
+
+    transition.exit?.(
+      buildExitContext(animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+        layoutMode: "flow",
+      }),
+    );
+
+    expect(calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        opacity: 1,
+        transform: "translate(48px, 36px)",
+        filter: "blur(0px)",
+      },
+      {
+        offset: 1,
+        opacity: 0,
+        transform: "translate(48px, 36px)",
+        filter: "blur(6px)",
       },
     ]);
   });

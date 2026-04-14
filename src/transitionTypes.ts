@@ -25,6 +25,8 @@ export type Point = {
   y: number;
 };
 
+export type ExitLayoutMode = "absolute" | "flow";
+
 export type ParentBounds = {
   width: number;
   height: number;
@@ -51,6 +53,7 @@ export type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
   viewportRect: Rect;
   anchorDelta: Point;
+  layoutMode: ExitLayoutMode;
 };
 
 export type MoveTransitionContext = TransitionBaseContext & {
@@ -117,6 +120,7 @@ export function buildExitContext(
   options: {
     viewportRect?: Rect;
     anchorDelta?: Point;
+    layoutMode?: ExitLayoutMode;
   } = {},
 ): ExitTransitionContext {
   return {
@@ -125,6 +129,7 @@ export function buildExitContext(
     parent,
     viewportRect: options.viewportRect ?? rect,
     anchorDelta: options.anchorDelta ?? { x: 0, y: 0 },
+    layoutMode: options.layoutMode ?? "absolute",
   };
 }
 

@@ -50,13 +50,14 @@ function ListExample() {
 
 ### `AutoTransition` 组件 Props
 
-| 属性         | 类型               | 默认值       | 说明                                                                                            |
-| :----------- | :----------------- | :----------- | :---------------------------------------------------------------------------------------------- |
-| `as`         | `ElementType`      | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                               |
-| `transition` | `TransitionPlugin` | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或 effect 组合式定义，也支持混搭。 |
-| `patch`      | `boolean`          | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                         |
-| `children`   | `ReactNode`        | -            | 需要应用动画的子元素。                                                                          |
-| `ref`        | `Ref<HTMLElement>` | -            | 转发给容器 DOM 元素的引用。                                                                     |
+| 属性         | 类型                   | 默认值       | 说明                                                                                                     |
+| :----------- | :--------------------- | :----------- | :------------------------------------------------------------------------------------------------------- |
+| `as`         | `ElementType`          | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                                        |
+| `transition` | `TransitionPlugin`     | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或 effect 组合式定义，也支持混搭。          |
+| `exitLayout` | `"absolute" \| "flow"` | `"absolute"` | 退出元素的布局策略。`absolute` 会冻结位置并立即脱离文档流；`flow` 会让元素在退出动画结束前继续参与布局。 |
+| `patch`      | `boolean`              | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                                  |
+| `children`   | `ReactNode`            | -            | 需要应用动画的子元素。                                                                                   |
+| `ref`        | `Ref<HTMLElement>`     | -            | 转发给容器 DOM 元素的引用。                                                                              |
 
 ### 推荐写法：`TransitionPlugin`
 
@@ -120,6 +121,27 @@ function Example({ children }: { children: React.ReactNode }) {
 }
 ```
 
+如果你的布局使用了明确的 `grid-area` 或其他“元素位置本来就固定”的槽位式布局，可以打开 `flow` 退出模式：
+
+```tsx
+import { AutoTransition, transitionPresets } from "@codehz/auto-transition";
+
+function DashboardGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <AutoTransition
+      as="section"
+      className="grid"
+      exitLayout="flow"
+      transition={{ exit: transitionPresets.exit.fade() }}
+    >
+      {children}
+    </AutoTransition>
+  );
+}
+```
+
+`exitLayout="flow"` 的语义是“退出元素在动画结束前继续参与布局”。这很适合 `grid-area` 这类固定槽位，但不适合希望其他元素在删除瞬间立即补位并触发 move 动画的列表场景。
+
 可组合 API 分成两层：
 
 - `transitionEffects.common.fade(options?)`
@@ -130,6 +152,7 @@ function Example({ children }: { children: React.ReactNode }) {
 - `transitionEffects.move.flipTranslate(options?)`
 - `transitionEffects.move.flipScale(options?)`
 - `transitionPhases.enter(...effects, options?)`
+- `transitionPhases.exit.flow(...effects, options?)`
 - `transitionPhases.exit.absolute(...effects, options?)`
 - `transitionPhases.move(...effects, options?)`
 
@@ -141,6 +164,7 @@ function Example({ children }: { children: React.ReactNode }) {
 - `transitionEffects.enter.slide()` 负责进入时的位移片段。
 - `transitionEffects.exit.anchorTranslate()` 负责退出时的 `anchorDelta` 补偿，也可附带额外滑出距离。
 - `transitionEffects.move.flipTranslate()` / `flipScale()` 把 FLIP 的位移补偿和缩放补偿拆成两个独立 effect。
+- `transitionPhases.exit.flow()` 会保留退出节点的普通布局参与，effect 只关注视觉属性本身。
 - `transitionPhases.exit.absolute()` 会自动注入退出时需要的绝对定位 keyframe 基座，effect 只关注视觉属性本身。
 
 effect 合并规则：
@@ -157,6 +181,10 @@ effect 合并规则：
 - `transitionPresets.enter.fade(options?)`
 - `transitionPresets.enter.slideFade(options?)`
 - `transitionPresets.enter.pop(options?)`
+- `transitionPresets.exit.fadeScale(options?)`
+- `transitionPresets.exit.fade(options?)`
+- `transitionPresets.exit.slideFade(options?)`
+- `transitionPresets.exit.shrink(options?)`
 - `transitionPresets.exit.absoluteFadeScale(options?)`
 - `transitionPresets.exit.absoluteFade(options?)`
 - `transitionPresets.exit.absoluteSlideFade(options?)`
@@ -168,7 +196,8 @@ effect 合并规则：
 其中：
 
 - `enter.fade()` 只做透明度过渡，适合不希望缩放或位移的内容。
-- 默认内置 `enter` / `exit` 分别使用 `transitionPresets.enter.fade()` 和 `transitionPresets.exit.absoluteFade()`，不会附带缩放。
+- 默认内置 `enter` / `exit` 分别使用 `transitionPresets.enter.fade()` 和退出布局对应的淡出预设；`exitLayout="absolute"` 时是 `transitionPresets.exit.absoluteFade()`，`exitLayout="flow"` 时是 `transitionPresets.exit.fade()`。
+- `exit.fade()` / `exit.fadeScale()` / `exit.slideFade()` / `exit.shrink()` 适合不希望退出元素被强制切到绝对定位的布局。
 - `enter.slideFade()` / `exit.absoluteSlideFade()` 支持通过 `axis`、`direction`、`distance` 快速做方向性滑入滑出。
 - `enter.pop()` 会带一个轻微 overshoot keyframe，适合按钮、标签、浮层等强调进入感的元素。
 - `exit.absoluteFadeScale()` 会自动处理退出元素的绝对定位 keyframes，并默认合并 `anchorDelta`。
@@ -242,6 +271,7 @@ type ExitTransitionContext = TransitionBaseContext & {
   rect: Rect;
   viewportRect: Rect;
   anchorDelta: Point;
+  layoutMode: "absolute" | "flow";
 };
 
 type MoveTransitionContext = TransitionBaseContext & {
@@ -266,7 +296,7 @@ export type CompiledTransitionPlugin = {
 
 ### 自定义插件示例
 
-下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时使用 `ctx.rect` 固定元素位置，并通过 `ctx.anchorDelta` 补偿当前批次提交前后测量基准产生的整体位移。
+下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时根据 `ctx.layoutMode` 决定是否固定元素位置，并通过 `ctx.anchorDelta` 补偿当前批次提交前后测量基准产生的整体位移。
 
 ```tsx
 import type { TransitionPlugin } from "@codehz/auto-transition";
@@ -281,29 +311,30 @@ const floatingActionsTransition: TransitionPlugin = {
       { duration: 220, easing: "ease-out" },
     );
   },
-  exit({ element, rect, anchorDelta }) {
+  exit({ element, rect, anchorDelta, layoutMode }) {
     const translate =
       anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
+    const absoluteBase =
+      layoutMode === "absolute"
+        ? {
+            position: "absolute" as const,
+            top: `${rect.y}px`,
+            left: `${rect.x}px`,
+            width: `${rect.width}px`,
+            height: `${rect.height}px`,
+            margin: "0",
+          }
+        : {};
 
     return element.animate(
       [
         {
-          position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-          margin: "0",
+          ...absoluteBase,
           opacity: 1,
           transform: `${translate}scale(1)`,
         },
         {
-          position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-          margin: "0",
+          ...absoluteBase,
           opacity: 0,
           transform: `${translate}scale(0.96)`,
         },
@@ -328,7 +359,7 @@ const floatingActionsTransition: TransitionPlugin = {
 ### 默认动画行为
 
 - **Enter**: 默认只做透明度淡入，不附带缩放 (250ms ease-out)。
-- **Exit**: 冻结元素当前的绝对定位并淡出；`anchorDelta` 会按同一微任务内整次提交前后的净位移统一结算，因此 replacement 式的“删旧插新”也能保持离场元素的屏幕坐标稳定 (250ms ease-in)。
+- **Exit**: 默认会根据 `exitLayout` 选择退出布局策略。`absolute` 会冻结元素当前的绝对定位并淡出；`flow` 会保持元素继续参与布局直到退出动画结束。两种模式下 `anchorDelta` 都会按同一微任务内整次提交前后的净位移统一结算 (250ms ease-in)。
 - **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定或同批次布局变更而整体平移时，也会自动附加这段批次级位移补偿 (250ms ease-in)。
 
 如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 或 effect phase 会优先于内置动画执行。

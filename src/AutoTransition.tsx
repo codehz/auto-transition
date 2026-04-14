@@ -16,11 +16,13 @@ import {
   buildEnterContext,
   buildExitContext,
   buildMoveContext,
+  type ExitLayoutMode,
   type ParentBounds,
   type Point,
   type Rect,
   type TransitionPlugin,
 } from "./transitionTypes.ts";
+import { prepareNodeForExit, restorePreparedExitNode, type PreparedExitState } from "./exitLayout.ts";
 import {
   defaultEnterTransition,
   defaultExitTransition,
@@ -40,6 +42,7 @@ export {
   getScaleFactor,
   type Dimensions,
   type CompiledTransitionPlugin,
+  type ExitLayoutMode,
   type EnterTransitionContext,
   type ExitTransitionContext,
   type MoveGeometry,
@@ -76,11 +79,15 @@ export {
   type ExitAbsoluteFadeScaleOptions,
   type ExitAbsoluteShrinkOptions,
   type ExitAbsoluteSlideFadeOptions,
+  type ExitFadeOptions,
+  type ExitFadeScaleOptions,
   type MoveFlipOptions,
   type MoveFlipScaleEffectOptions,
   type MoveFlipTranslateEffectOptions,
   type MoveSmoothOptions,
   type MoveTranslateOptions,
+  type ExitShrinkOptions,
+  type ExitSlideFadeOptions,
 } from "./transitionPresets.ts";
 
 type MeasuredParentRect = ParentBounds & {
@@ -96,6 +103,7 @@ type MeasuredParentRect = ParentBounds & {
 type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
   transition?: TransitionPlugin;
+  exitLayout?: ExitLayoutMode;
   patch?: boolean;
   ref?: ForwardedRef<HTMLElement>;
 };
@@ -127,20 +135,8 @@ function getViewportRect(rect: DOMRectReadOnly): Rect {
 
 type SnapshotState = BatchSnapshot<Element>;
 
-type LockedStyleState = {
-  position: string;
-  top: string;
-  left: string;
-  right: string;
-  bottom: string;
-  width: string;
-  height: string;
-  margin: string;
-  pointerEvents: string;
-};
-
 type PendingExitState = PendingExitRecord<Element> & {
-  lockedStyles: LockedStyleState;
+  preparedExit: PreparedExitState;
 };
 
 type BatchState = {
@@ -148,44 +144,6 @@ type BatchState = {
   pendingExits: Map<Element, PendingExitState>;
   pendingEnters: Set<Element>;
 };
-
-function lockNodeForExit(node: Element, rect: Rect): LockedStyleState {
-  const style = (node as HTMLElement).style;
-  const lockedStyles = {
-    position: style.position,
-    top: style.top,
-    left: style.left,
-    right: style.right,
-    bottom: style.bottom,
-    width: style.width,
-    height: style.height,
-    margin: style.margin,
-    pointerEvents: style.pointerEvents,
-  };
-  style.position = "absolute";
-  style.top = `${rect.y}px`;
-  style.left = `${rect.x}px`;
-  style.right = "auto";
-  style.bottom = "auto";
-  style.width = `${rect.width}px`;
-  style.height = `${rect.height}px`;
-  style.margin = "0";
-  style.pointerEvents = "none";
-  return lockedStyles;
-}
-
-function restoreLockedNode(node: Element, lockedStyles: LockedStyleState) {
-  const style = (node as HTMLElement).style;
-  style.position = lockedStyles.position;
-  style.top = lockedStyles.top;
-  style.left = lockedStyles.left;
-  style.right = lockedStyles.right;
-  style.bottom = lockedStyles.bottom;
-  style.width = lockedStyles.width;
-  style.height = lockedStyles.height;
-  style.margin = lockedStyles.margin;
-  style.pointerEvents = lockedStyles.pointerEvents;
-}
 
 /**
  * AutoTransition
@@ -232,6 +190,7 @@ export function AutoTransition<T extends ElementType | undefined>({
   as,
   children,
   transition,
+  exitLayout = "absolute",
   ref: externalRef,
   patch,
   ...rest
@@ -344,13 +303,13 @@ export function AutoTransition<T extends ElementType | undefined>({
 
         const rect = activeBatch.before.rects.get(node) ?? getRelativePosition(node, activeBatch.before.parent);
         const viewportRect = getViewportRect(node.getBoundingClientRect());
-        const lockedStyles = lockNodeForExit(node, rect);
+        const preparedExit = prepareNodeForExit(node, rect, exitLayout);
         exiting.add(node);
         activeBatch.pendingExits.set(node, {
           node,
           rect,
           viewportRect,
-          lockedStyles,
+          preparedExit,
         });
         return node;
       }
@@ -368,7 +327,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (pendingExit) {
         activeBatch.pendingExits.delete(node);
         exiting.delete(node);
-        restoreLockedNode(node, pendingExit.lockedStyles);
+        restorePreparedExitNode(node, pendingExit.preparedExit);
         return inserted;
       }
       if (!activeBatch.before.rects.has(node)) {
@@ -387,7 +346,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (pendingExit) {
         activeBatch.pendingExits.delete(node);
         exiting.delete(node);
-        restoreLockedNode(node, pendingExit.lockedStyles);
+        restorePreparedExitNode(node, pendingExit.preparedExit);
         return appended;
       }
       if (!activeBatch.before.rects.has(node)) {
@@ -411,7 +370,10 @@ export function AutoTransition<T extends ElementType | undefined>({
         anchorDelta?: Point;
       },
     ) {
-      const context = buildExitContext(node, rect, toParentBounds(parent), options);
+      const context = buildExitContext(node, rect, toParentBounds(parent), {
+        ...options,
+        layoutMode: exitLayout,
+      });
       const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
       const finalize = () => {
         exiting.delete(node);
@@ -452,7 +414,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         height: rect.height,
       };
     }
-  }, [patch, transition]);
+  }, [exitLayout, patch, transition]);
 
   const forkedRef = useForkRef(ref, externalRef);
   return (
