@@ -7,19 +7,20 @@ import {
   defaultExitTransition,
   defaultMoveTransition,
   defineTransition,
+  effects,
   getMoveGeometry,
   getScaleFactor,
-  transitionEffects,
-  transitionPhases,
-  transitionPresets,
+  preset,
   type CompiledTransitionPlugin,
+  type EnterEffect,
   type ParentBounds,
   type Point,
   type Rect,
   type TransitionPlugin,
 } from "./AutoTransition.tsx";
-import { prepareNodeForExit, restorePreparedExitNode } from "./exitLayout.ts";
+import { blur, effects as effectsModule, fade, flip, scale, translate, type MoveEffect } from "./effects.ts";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
+import { prepareNodeForExit, restorePreparedExitNode } from "./exitLayout.ts";
 
 const element = { id: "demo" } as unknown as Element;
 const parent: ParentBounds = { width: 300, height: 200 };
@@ -224,6 +225,22 @@ describe("TransitionPlugin contexts", () => {
   });
 });
 
+describe("effects module", () => {
+  test("exports both named effects and the aggregate object", () => {
+    expect(effects.fade).toBe(fade);
+    expect(effects.scale).toBe(scale);
+    expect(effects.blur).toBe(blur);
+    expect(effects.translate).toBe(translate);
+    expect(effects.flip).toBe(flip);
+
+    expect(effectsModule.fade).toBe(fade);
+    expect(effectsModule.scale).toBe(scale);
+    expect(effectsModule.blur).toBe(blur);
+    expect(effectsModule.translate).toBe(translate);
+    expect(effectsModule.flip).toBe(flip);
+  });
+});
+
 describe("defaultEnterTransition", () => {
   test("uses fade-only output by default", () => {
     const { animatedElement, calls } = createAnimatedElement();
@@ -254,14 +271,8 @@ describe("defaultEnterTransition", () => {
 });
 
 describe("defaultExitTransition", () => {
-  test("uses fade-only output when no anchor compensation is needed", () => {
-    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
+  test("uses the same fade authoring and injects absolute layout only when needed", () => {
+    const { animatedElement, calls } = createAnimatedElement();
 
     defaultExitTransition(buildExitContext(animatedElement, currentRect, parent));
 
@@ -291,45 +302,24 @@ describe("defaultExitTransition", () => {
     expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
 
-  test("switches to flow keyframes when flow exit layout is requested", () => {
-    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
+  test("omits the absolute layout base for flow exit layout", () => {
+    const { animatedElement, calls } = createAnimatedElement();
 
     defaultExitTransition(buildExitContext(animatedElement, currentRect, parent, { layoutMode: "flow" }));
 
-    expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        opacity: 1,
-      },
-      {
-        offset: 1,
-        opacity: 0,
-      },
+      { offset: 0, opacity: 1 },
+      { offset: 1, opacity: 0 },
     ]);
-    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
   });
 
   test("starts exit fade from the element's computed opacity", () => {
-    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
+    const { animatedElement, calls } = createAnimatedElement();
 
     withMockedComputedOpacity("0.5", () => {
       defaultExitTransition(buildExitContext(animatedElement, currentRect, parent));
     });
 
-    expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
         offset: 0,
@@ -353,38 +343,11 @@ describe("defaultExitTransition", () => {
       },
     ]);
   });
-
-  test("adds a fixed translate compensation when the parent shifts on exit", () => {
-    const calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes: keyframes as Keyframe[], options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
-
-    defaultExitTransition(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
-      }),
-    );
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes[0]?.transform).toBe("translate(48px, 36px)");
-    expect(calls[0]?.keyframes[1]?.transform).toBe("translate(48px, 36px)");
-  });
 });
 
 describe("defaultMoveTransition", () => {
-  test("keeps the previous transform output when no parent compensation is needed", () => {
-    const calls: { keyframes: PropertyIndexedKeyframes | Keyframe[] | null; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes, options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
+  test("keeps translate plus scale FLIP output by default", () => {
+    const { animatedElement, calls } = createAnimatedElement();
 
     defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent));
 
@@ -405,17 +368,10 @@ describe("defaultMoveTransition", () => {
   });
 
   test("adds parent anchor compensation to the move delta", () => {
-    const calls: { keyframes: PropertyIndexedKeyframes | Keyframe[] | null; options: KeyframeAnimationOptions }[] = [];
-    const animatedElement = {
-      animate(keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: KeyframeAnimationOptions) {
-        calls.push({ keyframes, options: options ?? {} });
-        return { finished: Promise.resolve() } as unknown as Animation;
-      },
-    } as unknown as Element;
+    const { animatedElement, calls } = createAnimatedElement();
 
     defaultMoveTransition(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
-    expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
         offset: 0,
@@ -432,101 +388,122 @@ describe("defaultMoveTransition", () => {
 });
 
 describe("defineTransition", () => {
-  test("supports mixing composable phases with imperative functions in one transition", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const exit = (ctx: Parameters<NonNullable<CompiledTransitionPlugin["exit"]>>[0]) => {
-      expect(ctx.rect).toEqual(currentRect);
-      expect(ctx.viewportRect).toEqual(viewportRect);
-      expect(ctx.anchorDelta).toEqual(anchorDelta);
-      return { finished: Promise.resolve() } as unknown as Animation;
-    };
-
+  test("keeps imperative handlers unchanged", () => {
+    const seen: string[] = [];
     const transition: TransitionPlugin = {
-      enter: transitionPresets.enter.fade({
-        duration: 180,
-      }),
-      exit,
-      move: transitionPresets.move.translate({
-        duration: 200,
-      }),
+      enter() {
+        seen.push("enter");
+        return {} as Animation;
+      },
+      exit() {
+        seen.push("exit");
+        return {} as Animation;
+      },
+      move() {
+        seen.push("move");
+        return {} as Animation;
+      },
     };
 
     const compiled = defineTransition(transition);
 
-    expect(compiled.exit).toBe(exit);
+    compiled.enter?.(buildEnterContext(element, currentRect, parent));
+    compiled.exit?.(buildExitContext(element, currentRect, parent));
+    compiled.move?.(buildMoveContext(element, currentRect, previousRect, parent));
 
-    compiled.enter?.(buildEnterContext(animatedElement, currentRect, parent));
-    compiled.exit?.(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
+    expect(seen).toEqual(["enter", "exit", "move"]);
+  });
+});
+
+describe("preset", () => {
+  test("builds declarative enter effects with single-layer phase config", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition(
+      preset({
+        enter: [effects.fade(0), effects.scale(0.96), effects.translate({ x: 0, y: 12 })],
+        timing: {
+          enter: { duration: 220, easing: "ease-out" },
+        },
       }),
     );
-    compiled.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
-    expect(calls).toHaveLength(2);
+    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+
     expect(calls[0]).toEqual({
       keyframes: [
-        { offset: 0, opacity: 0 },
-        { offset: 1, opacity: 1 },
-      ],
-      options: { duration: 180, easing: "ease-out" },
-    });
-    expect(calls[1]).toEqual({
-      keyframes: [
-        { offset: 0, transform: "translate(8px, -4px)" },
-        { offset: 1, transform: "translate(0, 0)" },
-      ],
-      options: { duration: 200, easing: "ease-out" },
-    });
-  });
-
-  test("compiles declarative effect phases into transition plugins", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.common.fade(),
-        transitionEffects.common.scale({
-          from: 0.96,
-          to: 1,
+        {
+          offset: 0,
+          opacity: 0,
           transformOrigin: "50% 50%",
-        }),
-        transitionEffects.enter.slide({
-          from: { x: 0, y: 12 },
-          to: { x: 0, y: 0 },
-        }),
-        { duration: 180, easing: "linear" },
-      ),
+          transform: "translate(0px, 12px) scale(0.96, 0.96)",
+        },
+        {
+          offset: 1,
+          opacity: 1,
+          transformOrigin: "50% 50%",
+          transform: "translate(0, 0) scale(1, 1)",
+        },
+      ],
+      options: { duration: 220, easing: "ease-out" },
     });
-
-    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
-
-    expect(calls).toEqual([
-      {
-        keyframes: [
-          {
-            offset: 0,
-            opacity: 0,
-            transformOrigin: "50% 50%",
-            transform: "translate(0px, 12px) scale(0.96, 0.96)",
-          },
-          {
-            offset: 1,
-            opacity: 1,
-            transformOrigin: "50% 50%",
-            transform: "translate(0, 0) scale(1, 1)",
-          },
-        ],
-        options: { duration: 180, easing: "linear" },
-      },
-    ]);
   });
 
-  test("absolute exit preset automatically includes anchor compensation", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      exit: transitionPresets.exit.absoluteFadeScale(),
+  test("uses the same exit authoring for absolute and flow layout", () => {
+    const transition = defineTransition(
+      preset({
+        exit: effects.fade(0),
+        timing: {
+          exit: { duration: 180, easing: "ease-in" },
+        },
+      }),
+    );
+
+    const absolute = createAnimatedElement();
+    transition.exit?.(buildExitContext(absolute.animatedElement, currentRect, parent));
+    expect(absolute.calls[0]).toEqual({
+      keyframes: [
+        {
+          offset: 0,
+          position: "absolute",
+          opacity: 1,
+          width: "120px",
+          height: "50px",
+          margin: "0",
+          top: "60px",
+          left: "80px",
+        },
+        {
+          offset: 1,
+          position: "absolute",
+          opacity: 0,
+          width: "120px",
+          height: "50px",
+          margin: "0",
+          top: "60px",
+          left: "80px",
+        },
+      ],
+      options: { duration: 180, easing: "ease-in" },
     });
+
+    const flow = createAnimatedElement();
+    transition.exit?.(buildExitContext(flow.animatedElement, currentRect, parent, { layoutMode: "flow" }));
+    expect(flow.calls[0]).toEqual({
+      keyframes: [
+        { offset: 0, opacity: 1 },
+        { offset: 1, opacity: 0 },
+      ],
+      options: { duration: 180, easing: "ease-in" },
+    });
+  });
+
+  test("adds anchor compensation to exit translate automatically", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition(
+      preset({
+        exit: [effects.fade(0), effects.translate({ x: 0, y: -10 })],
+      }),
+    );
 
     transition.exit?.(
       buildExitContext(animatedElement, currentRect, parent, {
@@ -535,135 +512,6 @@ describe("defineTransition", () => {
       }),
     );
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        position: "absolute",
-        opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 36px) scale(1, 1)",
-        width: "120px",
-        height: "50px",
-        margin: "0",
-        top: "60px",
-        left: "80px",
-      },
-      {
-        offset: 1,
-        position: "absolute",
-        opacity: 0,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 36px) scale(0.96, 0.96)",
-        width: "120px",
-        height: "50px",
-        margin: "0",
-        top: "60px",
-        left: "80px",
-      },
-    ]);
-  });
-
-  test("flow exit preset keeps layout in normal flow while adding anchor compensation", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      exit: transitionPresets.exit.fadeScale(),
-    });
-
-    transition.exit?.(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
-        layoutMode: "flow",
-      }),
-    );
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 36px) scale(1, 1)",
-      },
-      {
-        offset: 1,
-        opacity: 0,
-        transformOrigin: "50% 50%",
-        transform: "translate(48px, 36px) scale(0.96, 0.96)",
-      },
-    ]);
-  });
-
-  test("flip preset can omit scale while keeping compensated motion", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      move: transitionPresets.move.flip({ includeScale: false }),
-    });
-
-    transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual([
-      { offset: 0, transform: "translate(8px, -4px)" },
-      { offset: 1, transform: "translate(0, 0)" },
-    ]);
-    expect(calls[0]?.options).toEqual({ duration: 250, easing: "ease-in" });
-  });
-
-  test("pop preset adds an overshoot keyframe for enter", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPresets.enter.pop({
-        fromTranslate: { x: 0, y: 6 },
-      }),
-    });
-
-    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        opacity: 0,
-        transformOrigin: "50% 50%",
-        transform: "translate(0px, 6px) scale(0.9, 0.9)",
-      },
-      {
-        offset: 0.7,
-        opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(0px, 6px) scale(1.03, 1.03)",
-      },
-      {
-        offset: 1,
-        opacity: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(0, 0) scale(1, 1)",
-      },
-    ]);
-    expect(calls[0]?.options).toEqual({
-      duration: 280,
-      easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-    });
-  });
-
-  test("absolute slide fade preset combines anchor compensation with travel distance", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      exit: transitionPresets.exit.absoluteSlideFade({
-        distance: 10,
-      }),
-    });
-
-    transition.exit?.(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
-      }),
-    );
-
-    expect(calls).toHaveLength(1);
     expect(calls[0]?.keyframes).toEqual([
       {
         offset: 0,
@@ -688,215 +536,148 @@ describe("defineTransition", () => {
         left: "80px",
       },
     ]);
-    expect(calls[0]?.options).toEqual({ duration: 220, easing: "ease-in" });
   });
 
-  test("translate preset provides motion-only FLIP defaults", () => {
+  test("supports numeric and string blur values", () => {
+    const enterTransition = defineTransition(
+      preset({
+        enter: blur(8),
+      }),
+    );
+    const enter = createAnimatedElement();
+    enterTransition.enter?.(buildEnterContext(enter.animatedElement, currentRect, parent));
+    expect(enter.calls[0]?.keyframes).toEqual([
+      { offset: 0, filter: "blur(8px)" },
+      { offset: 1, filter: "blur(0px)" },
+    ]);
+
+    const exitTransition = defineTransition(
+      preset({
+        exit: blur("0.5rem"),
+      }),
+    );
+    const exit = createAnimatedElement();
+    exitTransition.exit?.(buildExitContext(exit.animatedElement, currentRect, parent, { layoutMode: "flow" }));
+    expect(exit.calls[0]?.keyframes).toEqual([
+      { offset: 0, filter: "blur(0px)" },
+      { offset: 1, filter: "blur(0.5rem)" },
+    ]);
+  });
+
+  test("supports numeric and object scale values", () => {
+    const enterTransition = defineTransition(
+      preset({
+        enter: scale(0.96),
+      }),
+    );
+    const enter = createAnimatedElement();
+    enterTransition.enter?.(buildEnterContext(enter.animatedElement, currentRect, parent));
+    expect(enter.calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "50% 50%",
+        transform: "scale(0.96, 0.96)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "50% 50%",
+        transform: "scale(1, 1)",
+      },
+    ]);
+
+    const exitTransition = defineTransition(
+      preset({
+        exit: scale({ x: 1.1, y: 0.9 }),
+      }),
+    );
+    const exit = createAnimatedElement();
+    exitTransition.exit?.(buildExitContext(exit.animatedElement, currentRect, parent, { layoutMode: "flow" }));
+    expect(exit.calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        transformOrigin: "50% 50%",
+        transform: "scale(1, 1)",
+      },
+      {
+        offset: 1,
+        transformOrigin: "50% 50%",
+        transform: "scale(1.1, 0.9)",
+      },
+    ]);
+  });
+
+  test("flip can omit scale while keeping compensated motion", () => {
     const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      move: transitionPresets.move.translate(),
-    });
+    const transition = defineTransition(
+      preset({
+        move: effects.flip({ scale: false }),
+        timing: {
+          move: { duration: 200, easing: "ease-out" },
+        },
+      }),
+    );
 
     transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.keyframes).toEqual([
-      { offset: 0, transform: "translate(8px, -4px)" },
-      { offset: 1, transform: "translate(0, 0)" },
-    ]);
-    expect(calls[0]?.options).toEqual({ duration: 220, easing: "ease-out" });
-  });
-});
-
-describe("transitionEffects composition", () => {
-  test("merges fade, scale, and blur into one animation", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.common.fade({ from: 0, to: 1 }),
-        transitionEffects.common.scale({ from: 0.96, to: 1 }),
-        transitionEffects.common.blur({ from: "8px", to: "0px" }),
-        { duration: 250, easing: "ease-out" },
-      ),
+    expect(calls[0]).toEqual({
+      keyframes: [
+        { offset: 0, transformOrigin: "0 0", transform: "translate(8px, -4px)" },
+        { offset: 1, transformOrigin: "0 0", transform: "translate(0, 0)" },
+      ],
+      options: { duration: 200, easing: "ease-out" },
     });
+  });
 
-    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
+  test("applies independent timing per phase", () => {
+    const transition = defineTransition(
+      preset({
+        enter: effects.fade(0),
+        exit: effects.fade(0),
+        move: effects.flip(),
+        timing: {
+          enter: { duration: 111, easing: "ease-out" },
+          exit: { duration: 222, easing: "ease-in" },
+          move: { duration: 333, easing: "linear" },
+        },
+      }),
+    );
 
-    expect(calls).toEqual([
-      {
-        keyframes: [
-          {
-            offset: 0,
-            opacity: 0,
-            transformOrigin: "50% 50%",
-            transform: "scale(0.96, 0.96)",
-            filter: "blur(8px)",
-          },
-          {
-            offset: 1,
-            opacity: 1,
-            transformOrigin: "50% 50%",
-            transform: "scale(1, 1)",
-            filter: "blur(0px)",
-          },
+    const enter = createAnimatedElement();
+    transition.enter?.(buildEnterContext(enter.animatedElement, currentRect, parent));
+    expect(enter.calls[0]?.options).toEqual({ duration: 111, easing: "ease-out" });
+
+    const exit = createAnimatedElement();
+    transition.exit?.(buildExitContext(exit.animatedElement, currentRect, parent, { layoutMode: "flow" }));
+    expect(exit.calls[0]?.options).toEqual({ duration: 222, easing: "ease-in" });
+
+    const move = createAnimatedElement();
+    transition.move?.(buildMoveContext(move.animatedElement, currentRect, previousRect, parent));
+    expect(move.calls[0]?.options).toEqual({ duration: 333, easing: "linear" });
+  });
+
+  test("supports keyframes for declarative effects", () => {
+    const { animatedElement, calls } = createAnimatedElement();
+    const transition = defineTransition(
+      preset({
+        enter: [
+          effects.fade({
+            keyframes: [
+              { offset: 0.3, value: 0.2 },
+              { offset: 0.7, value: 1 },
+            ],
+          }),
+          effects.blur({
+            keyframes: [
+              { offset: 0, value: 10 },
+              { offset: 0.5, value: 4 },
+            ],
+          }),
         ],
-        options: { duration: 250, easing: "ease-out" },
-      },
-    ]);
-  });
-
-  test("composes slide with scale into a single transform timeline", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.enter.slide({ axis: "x", distance: 24 }),
-        transitionEffects.common.scale({ from: 0.92, to: 1 }),
-        { duration: 210, easing: "ease-out" },
-      ),
-    });
-
-    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
-
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        transformOrigin: "50% 50%",
-        transform: "translate(24px, 0px) scale(0.92, 0.92)",
-      },
-      {
-        offset: 1,
-        transformOrigin: "50% 50%",
-        transform: "translate(0, 0) scale(1, 1)",
-      },
-    ]);
-  });
-
-  test("composes FLIP translate and scale as independent effects", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      move: transitionPhases.move(
-        transitionEffects.move.flipTranslate({ includeAnchorDelta: true }),
-        transitionEffects.move.flipScale(),
-        { duration: 260, easing: "linear" },
-      ),
-    });
-
-    transition.move?.(buildMoveContext(animatedElement, currentRect, previousRect, parent, { anchorDelta }));
-
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        transformOrigin: "0 0",
-        transform: "translate(8px, -4px) scale(1.5, 1.8)",
-      },
-      {
-        offset: 1,
-        transformOrigin: "0 0",
-        transform: "translate(0, 0) scale(1, 1)",
-      },
-    ]);
-  });
-
-  test("keeps absolute exit layout base while adding blur", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      exit: transitionPhases.exit.absolute(
-        transitionEffects.common.fade({ from: 1, to: 0 }),
-        transitionEffects.exit.anchorTranslate({ includeAnchorDelta: true }),
-        transitionEffects.common.blur({ from: "0px", to: "6px" }),
-        { duration: 230, easing: "ease-in" },
-      ),
-    });
-
-    transition.exit?.(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
+        timing: {
+          enter: { duration: 200, easing: "linear" },
+        },
       }),
     );
-
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        position: "absolute",
-        opacity: 1,
-        transform: "translate(48px, 36px)",
-        filter: "blur(0px)",
-        width: "120px",
-        height: "50px",
-        margin: "0",
-        top: "60px",
-        left: "80px",
-      },
-      {
-        offset: 1,
-        position: "absolute",
-        opacity: 0,
-        transform: "translate(48px, 36px)",
-        filter: "blur(6px)",
-        width: "120px",
-        height: "50px",
-        margin: "0",
-        top: "60px",
-        left: "80px",
-      },
-    ]);
-  });
-
-  test("flow exit phase omits the absolute layout base while adding blur", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      exit: transitionPhases.exit.flow(
-        transitionEffects.common.fade({ from: 1, to: 0 }),
-        transitionEffects.exit.anchorTranslate({ includeAnchorDelta: true }),
-        transitionEffects.common.blur({ from: "0px", to: "6px" }),
-        { duration: 230, easing: "ease-in" },
-      ),
-    });
-
-    transition.exit?.(
-      buildExitContext(animatedElement, currentRect, parent, {
-        viewportRect,
-        anchorDelta,
-        layoutMode: "flow",
-      }),
-    );
-
-    expect(calls[0]?.keyframes).toEqual([
-      {
-        offset: 0,
-        opacity: 1,
-        transform: "translate(48px, 36px)",
-        filter: "blur(0px)",
-      },
-      {
-        offset: 1,
-        opacity: 0,
-        transform: "translate(48px, 36px)",
-        filter: "blur(6px)",
-      },
-    ]);
-  });
-
-  test("fills missing frame values from the nearest surrounding keyframe", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.common.fade({
-          keyframes: [
-            { offset: 0.3, value: 0.2 },
-            { offset: 0.7, value: 1 },
-          ],
-        }),
-        transitionEffects.common.blur({
-          keyframes: [
-            { offset: 0, value: "10px" },
-            { offset: 0.5, value: "4px" },
-          ],
-        }),
-        { duration: 200, easing: "linear" },
-      ),
-    });
 
     transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
 
@@ -907,58 +688,36 @@ describe("transitionEffects composition", () => {
       { offset: 0.7, opacity: 1, filter: "blur(4px)" },
       { offset: 1, opacity: 1, filter: "blur(4px)" },
     ]);
+    expect(calls[0]?.options).toEqual({ duration: 200, easing: "linear" });
   });
 
-  test("throws when two effects both control opacity", () => {
-    const compiled = defineTransition({
-      enter: transitionPhases.enter(transitionEffects.common.fade(), transitionEffects.common.fade()),
-    });
+  test("throws a clearer conflict error for duplicate translate effects", () => {
+    const transition = defineTransition(
+      preset({
+        enter: [effects.translate({ x: 0, y: 8 }), effects.translate({ x: 0, y: 4 })],
+      }),
+    );
 
-    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
-      'Transition effects conflict on "opacity"',
+    expect(() => transition.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
+      "translate() conflicts with another translate() effect",
     );
   });
 
-  test("throws when two effects both control transform.scale", () => {
-    const compiled = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.common.scale(),
-        transitionEffects.common.scale({ from: 0.9, to: 1 }),
-      ),
-    });
-
-    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
-      'Transition effects conflict on "transformOrigin"',
-    );
+  test("throws a clearer phase error when move-only effects are forced into enter", () => {
+    expect(() =>
+      preset({
+        enter: [flip() as unknown as EnterEffect],
+      }),
+    ).toThrow("flip() can only be used in move");
   });
 
-  test("throws when two effects both control filter.blur", () => {
-    const compiled = defineTransition({
-      enter: transitionPhases.enter(transitionEffects.common.blur(), transitionEffects.common.blur({ from: "4px" })),
+  test("supports move-only preset values typed as single effect", () => {
+    const moveOnly: MoveEffect = effects.flip();
+    const transition = preset({
+      move: moveOnly,
     });
 
-    expect(() => compiled.enter?.(buildEnterContext(element, currentRect, parent))).toThrow(
-      'Transition effects conflict on "filter.blur"',
-    );
-  });
-
-  test("uses shared phase timing for all composed effects", () => {
-    const { animatedElement, calls } = createAnimatedElement();
-    const transition = defineTransition({
-      enter: transitionPhases.enter(
-        transitionEffects.common.fade(),
-        transitionEffects.common.scale(),
-        transitionEffects.common.blur(),
-        { duration: 333, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-      ),
-    });
-
-    transition.enter?.(buildEnterContext(animatedElement, currentRect, parent));
-
-    expect(calls[0]?.options).toEqual({
-      duration: 333,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-    });
+    expect(transition.move).toBeDefined();
   });
 });
 

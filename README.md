@@ -1,30 +1,20 @@
 # @codehz/auto-transition
 
-一个轻量级的 React 组件库，旨在为容器内的子元素提供自动的**进入 (Enter)**、**退出 (Exit)** 和**移动 (Move)** 动画。
+一个轻量级的 React 组件库，用于为容器内的子元素自动添加进入、退出和移动动画。
 
-它通过拦截底层的 DOM 操作（如 `appendChild`、`removeChild`）来实现动画，无需开发者手动管理复杂的动画状态。
-
-## 主要功能
-
-- **全自动动画**：自动识别子元素的添加、删除和位置变化并应用动画。
-- **高性能**：基于原生 Web Animations API 实现，确保流畅的 160fps 体验。
-- **布局感知**：自动计算元素在容器内的相对位置，支持平滑的位移和缩放过渡。
-- **高度可定制**：支持通过插件系统自定义动画效果，插件可直接读取预计算的几何上下文。
-- **无侵入性**：支持通过 `Slot` 将行为附着到现有布局节点。
+它通过拦截容器上的 DOM 变更来推导 enter / exit / move，并使用原生 Web Animations API 播放动画。你不需要维护额外的动画状态，也不需要手写 FLIP 细节。
 
 ## 安装
 
-该项目依赖于 React 19+。
+该项目依赖 React 19+。
 
 ```bash
 npm install @codehz/auto-transition
-# 或者使用 bun
+# 或
 bun add @codehz/auto-transition
 ```
 
-## 快速上手
-
-只需将需要动画的列表或元素包裹在 `AutoTransition` 中即可：
+## 快速开始
 
 ```tsx
 import { AutoTransition } from "@codehz/auto-transition";
@@ -36,336 +26,291 @@ function ListExample() {
   return (
     <AutoTransition as="ul" className="grid gap-2">
       {items.map((id) => (
-        <li key={id} onClick={() => setItems(items.filter((i) => i !== id))}>
-          项目 {id} (点击删除)
+        <li key={id} onClick={() => setItems(items.filter((item) => item !== id))}>
+          Item {id}
         </li>
       ))}
-      <button onClick={() => setItems([...items, Date.now()])}>添加项目</button>
+      <button onClick={() => setItems([...items, Date.now()])}>Add</button>
     </AutoTransition>
   );
 }
 ```
 
-## API 参考
+## Declarative API
 
-### `AutoTransition` 组件 Props
+新版 declarative API 只有两层：
 
-| 属性         | 类型                   | 默认值       | 说明                                                                                                     |
-| :----------- | :--------------------- | :----------- | :------------------------------------------------------------------------------------------------------- |
-| `as`         | `ElementType`          | `Slot`       | 容器渲染成的 HTML 标签或组件。省略时使用 `@radix-ui/react-slot`。                                        |
-| `transition` | `TransitionPlugin`     | 内置默认动画 | 用于自定义进入、退出和移动动画；每个 phase 都可以单独使用函数或 effect 组合式定义，也支持混搭。          |
-| `exitLayout` | `"absolute" \| "flow"` | `"absolute"` | 退出元素的布局策略。`absolute` 会冻结位置并立即脱离文档流；`flow` 会让元素在退出动画结束前继续参与布局。 |
-| `patch`      | `boolean`              | `false`      | 是否启用内置 `Activity` 补丁，拦截子节点被强制 `display: none` 的行为。                                  |
-| `children`   | `ReactNode`            | -            | 需要应用动画的子元素。                                                                                   |
-| `ref`        | `Ref<HTMLElement>`     | -            | 转发给容器 DOM 元素的引用。                                                                              |
+- `preset({ enter, exit, move, timing })`
+- `effects.fade()` / `effects.scale()` / `effects.blur()` / `effects.translate()` / `effects.flip()`
 
-### 推荐写法：`TransitionPlugin`
+```tsx
+import { AutoTransition, effects, preset } from "@codehz/auto-transition";
 
-新版推荐把动画拆成可组合的 effect，再用 phase 工厂拼成 enter / exit / move。这样 `fade`、`scale`、`blur`、`slide`、FLIP 补偿都可以自由组合，不需要继续堆 `fadeScaleBlurSlide...` 这类预设名。
+const cardTransition = preset({
+  enter: [effects.fade(0), effects.scale(0.96), effects.translate({ x: 0, y: 12 })],
+  exit: [effects.fade(0), effects.scale(0.96), effects.translate({ x: 0, y: -8 })],
+  move: effects.flip(),
+  timing: {
+    enter: { duration: 220, easing: "ease-out" },
+    exit: { duration: 180, easing: "ease-in" },
+    move: { duration: 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  },
+});
+
+function Example({ children }: { children: React.ReactNode }) {
+  return <AutoTransition transition={cardTransition}>{children}</AutoTransition>;
+}
+```
+
+### 为什么更简单
+
+- 用户只组织一层 `enter / exit / move`
+- `translate()` 只传一个偏移量 `{ x, y }`
+- `scale()` 常见场景只传一个数字
+- `blur()` 支持数字，自动转成 `px`
+- `exitLayout="absolute"` 和 `exitLayout="flow"` 共用同一套 exit authoring
+- `anchorDelta` 和 move FLIP 补偿由运行时自动处理
+
+## Effects
+
+### 从根入口导入
+
+```ts
+import { effects } from "@codehz/auto-transition";
+
+effects.fade(0);
+effects.scale(0.96);
+effects.blur(8);
+effects.translate({ x: 0, y: 12 });
+effects.flip();
+```
+
+### 从子路径按需导入
+
+```ts
+import { fade, scale, blur, translate, flip } from "@codehz/auto-transition/effects";
+```
+
+### `fade`
+
+```ts
+fade();
+fade(0);
+fade({ value: 0.2 });
+fade({
+  keyframes: [
+    { offset: 0.2, value: 0.1 },
+    { offset: 0.7, value: 1 },
+  ],
+});
+```
+
+- `enter: fade(0)` 等价于 `0 -> currentOpacity`
+- `exit: fade(0)` 等价于 `currentOpacity -> 0`
+
+### `scale`
+
+```ts
+scale();
+scale(0.96);
+scale({ x: 1.05, y: 0.95 });
+scale({
+  value: 0.92,
+  origin: "50% 0%",
+});
+```
+
+- `enter: scale(0.96)` 等价于 `0.96 -> 1`
+- `exit: scale(0.96)` 等价于 `1 -> 0.96`
+- 数字用于等比缩放
+- `{ x, y }` 用于非等比缩放
+
+### `blur`
+
+```ts
+blur();
+blur(8);
+blur("0.5rem");
+```
+
+- `enter: blur(8)` 等价于 `8px -> 0px`
+- `exit: blur(8)` 等价于 `0px -> 8px`
+- 数字自动转成 `px`
+
+### `translate`
+
+```ts
+translate({ x: 0, y: 12 });
+translate({
+  keyframes: [
+    { offset: 0, value: { x: 0, y: 12 } },
+    { offset: 0.6, value: { x: 0, y: 4 } },
+  ],
+});
+```
+
+- `enter: translate({ x: 0, y: 12 })` 等价于 `{0,12} -> {0,0}`
+- `exit: translate({ x: 0, y: -8 })` 等价于 `{0,0} -> {0,-8}`
+- exit 时会自动叠加 `anchorDelta`
+
+### `flip`
+
+```ts
+flip();
+flip({ scale: false });
+flip({ origin: "0 0" });
+```
+
+- 仅用于 `move`
+- 默认同时处理 translate 和 scale
+- `flip({ scale: false })` 只保留位移补偿
+
+## `preset()` API
+
+```ts
+type PresetSpec = {
+  enter?: EnterEffect | EnterEffect[];
+  exit?: ExitEffect | ExitEffect[];
+  move?: MoveEffect;
+  timing?: {
+    enter?: TransitionTiming<EnterTransitionContext>;
+    exit?: TransitionTiming<ExitTransitionContext>;
+    move?: TransitionTiming<MoveTransitionContext>;
+  };
+};
+
+declare function preset(spec: PresetSpec): TransitionPlugin;
+```
+
+说明：
+
+- `enter` 和 `exit` 支持单个 effect 或数组
+- `move` 当前主推单个 `flip()` effect
+- `timing` 统一放在根级
+- 默认内置动画等价于：
+  - `enter: effects.fade(0)`
+  - `exit: effects.fade(0)`
+  - `move: effects.flip()`
+
+## `exitLayout`
+
+`AutoTransition` 仍然保留：
+
+```tsx
+<AutoTransition exitLayout="absolute" />
+<AutoTransition exitLayout="flow" />
+```
+
+含义：
+
+- `absolute`：退出元素会被冻结到绝对定位，再执行动画
+- `flow`：退出元素会在动画结束前继续参与布局
+
+新版 declarative API 不需要为这两种模式分别写两套 preset。运行时会自动根据 `exitLayout` 决定是否注入 absolute layout keyframes。
+
+## Imperative Escape Hatch
+
+如果 declarative `preset()` 还不够，可以继续直接写 `TransitionPlugin` 或用 `defineTransition()` 编译：
 
 ```tsx
 import {
   AutoTransition,
+  buildEnterContext,
+  buildExitContext,
+  buildMoveContext,
   defineTransition,
-  transitionEffects,
-  transitionPhases,
   type TransitionPlugin,
 } from "@codehz/auto-transition";
 
-const floatingActionsTransition = defineTransition({
-  enter: transitionPhases.enter(
-    transitionEffects.common.fade({ from: 0, to: 1 }),
-    transitionEffects.common.scale({ from: 0.96, to: 1 }),
-    transitionEffects.common.blur({ from: "8px", to: "0px" }),
-    transitionEffects.enter.slide({ axis: "y", distance: 10 }),
-    { duration: 220, easing: "ease-out" },
-  ),
-  exit({ element, rect, anchorDelta }) {
-    const translate =
-      anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
-
-    return element.animate(
-      [
-        {
-          position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-          margin: "0",
-          opacity: 1,
-          transform: `${translate}scale(1)`,
-        },
-        {
-          position: "absolute",
-          top: `${rect.y}px`,
-          left: `${rect.x}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-          margin: "0",
-          opacity: 0,
-          transform: `${translate}scale(0.96)`,
-        },
-      ],
-      { duration: 200, easing: "ease-in" },
-    );
-  },
-  move: transitionPhases.move(transitionEffects.move.flipTranslate(), transitionEffects.move.flipScale(), {
-    duration: 320,
-    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-  }),
-} satisfies TransitionPlugin);
-
-function Example({ children }: { children: React.ReactNode }) {
-  return <AutoTransition transition={floatingActionsTransition}>{children}</AutoTransition>;
-}
-```
-
-如果你的布局使用了明确的 `grid-area` 或其他“元素位置本来就固定”的槽位式布局，可以打开 `flow` 退出模式：
-
-```tsx
-import { AutoTransition, transitionPresets } from "@codehz/auto-transition";
-
-function DashboardGrid({ children }: { children: React.ReactNode }) {
-  return (
-    <AutoTransition
-      as="section"
-      className="grid"
-      exitLayout="flow"
-      transition={{ exit: transitionPresets.exit.fade() }}
-    >
-      {children}
-    </AutoTransition>
-  );
-}
-```
-
-`exitLayout="flow"` 的语义是“退出元素在动画结束前继续参与布局”。这很适合 `grid-area` 这类固定槽位，但不适合希望其他元素在删除瞬间立即补位并触发 move 动画的列表场景。
-
-可组合 API 分成两层：
-
-- `transitionEffects.common.fade(options?)`
-- `transitionEffects.common.scale(options?)`
-- `transitionEffects.common.blur(options?)`
-- `transitionEffects.enter.slide(options?)`
-- `transitionEffects.exit.anchorTranslate(options?)`
-- `transitionEffects.move.flipTranslate(options?)`
-- `transitionEffects.move.flipScale(options?)`
-- `transitionPhases.enter(...effects, options?)`
-- `transitionPhases.exit.flow(...effects, options?)`
-- `transitionPhases.exit.absolute(...effects, options?)`
-- `transitionPhases.move(...effects, options?)`
-
-其中：
-
-- `transitionEffects.common.fade()` 负责 opacity 时间线，值会相对元素当前 opacity 缩放。
-- `transitionEffects.common.scale()` 负责结构化的 `transform.scale`，会自动输出固定顺序的 transform 字符串。
-- `transitionEffects.common.blur()` 首版封装 `filter: blur(...)`，后续可以自然扩到更多 filter 片段。
-- `transitionEffects.enter.slide()` 负责进入时的位移片段。
-- `transitionEffects.exit.anchorTranslate()` 负责退出时的 `anchorDelta` 补偿，也可附带额外滑出距离。
-- `transitionEffects.move.flipTranslate()` / `flipScale()` 把 FLIP 的位移补偿和缩放补偿拆成两个独立 effect。
-- `transitionPhases.exit.flow()` 会保留退出节点的普通布局参与，effect 只关注视觉属性本身。
-- `transitionPhases.exit.absolute()` 会自动注入退出时需要的绝对定位 keyframe 基座，effect 只关注视觉属性本身。
-
-effect 合并规则：
-
-- 所有效果的 `offset` 会取并集并按升序输出。
-- 中间缺失值会沿用最近一次已知值；起点和终点缺失时，会分别用首个和末个已知值补齐。
-- `transform` 固定按 `translate -> scale` 合成。
-- `filter` 当前固定按 `blur()` 合成。
-- 两个 effect 不能同时控制同一个原子字段，例如 `opacity`、`transform.scale`、`filter.blur`；冲突会直接抛错。
-
-`transitionPresets` 仍然保留，作为新组合 API 之上的薄封装，适合快速使用常见动画：
-
-- `transitionPresets.enter.fadeScale(options?)`
-- `transitionPresets.enter.fade(options?)`
-- `transitionPresets.enter.slideFade(options?)`
-- `transitionPresets.enter.pop(options?)`
-- `transitionPresets.exit.fadeScale(options?)`
-- `transitionPresets.exit.fade(options?)`
-- `transitionPresets.exit.slideFade(options?)`
-- `transitionPresets.exit.shrink(options?)`
-- `transitionPresets.exit.absoluteFadeScale(options?)`
-- `transitionPresets.exit.absoluteFade(options?)`
-- `transitionPresets.exit.absoluteSlideFade(options?)`
-- `transitionPresets.exit.absoluteShrink(options?)`
-- `transitionPresets.move.flip(options?)`
-- `transitionPresets.move.translate(options?)`
-- `transitionPresets.move.smooth(options?)`
-
-其中：
-
-- `enter.fade()` 只做透明度过渡，适合不希望缩放或位移的内容。
-- 默认内置 `enter` / `exit` 分别使用 `transitionPresets.enter.fade()` 和退出布局对应的淡出预设；`exitLayout="absolute"` 时是 `transitionPresets.exit.absoluteFade()`，`exitLayout="flow"` 时是 `transitionPresets.exit.fade()`。
-- `exit.fade()` / `exit.fadeScale()` / `exit.slideFade()` / `exit.shrink()` 适合不希望退出元素被强制切到绝对定位的布局。
-- `enter.slideFade()` / `exit.absoluteSlideFade()` 支持通过 `axis`、`direction`、`distance` 快速做方向性滑入滑出。
-- `enter.pop()` 会带一个轻微 overshoot keyframe，适合按钮、标签、浮层等强调进入感的元素。
-- `exit.absoluteFadeScale()` 会自动处理退出元素的绝对定位 keyframes，并默认合并 `anchorDelta`。
-- `exit.absoluteShrink()` 是更明显一点的离场收缩预设。
-- `move.flip()` 会自动使用 `ctx.delta + ctx.anchorDelta`，默认附带缩放补偿；可通过 `includeScale: false` 关闭缩放。
-- `move.translate()` 是只保留位移补偿的轻量版 FLIP。
-- `move.smooth()` 使用更柔和的 easing 和更长的默认时长，适合卡片、面板这类需要“滑顺”感的布局变化。
-
-如果你想显式地把 `TransitionPlugin` 编译成纯函数式接口，也可以使用 `defineTransition(transition)`；传给 `transition` 时两种写法行为一致。
-
-```ts
-import { defineTransition } from "@codehz/auto-transition";
-
-const compiled = defineTransition(floatingActionsTransition);
-```
-
-对应的类型如下：
-
-```ts
-type TransitionTiming<Ctx> = KeyframeAnimationOptions | ((ctx: Ctx) => KeyframeAnimationOptions);
-
-type EffectFrame = {
-  offset: number;
-  opacity?: number;
-  transform?: {
-    translate?: Point;
-    scale?: { x: number; y: number };
-  };
-  filter?: {
-    blur?: string;
-  };
-  transformOrigin?: string;
-  style?: Partial<Keyframe>;
-};
-
-type TransitionPhaseHandler<Ctx> = (ctx: Ctx) => Animation;
-
-type TransitionEffect<Ctx> = {
-  build(ctx: Ctx): EffectFrame[];
-};
-
-type TransitionPhaseDefinition<Ctx> = {
-  effects: TransitionEffect<Ctx>[];
-  options?: TransitionTiming<Ctx>;
-};
-
-type TransitionPhaseLike<Ctx> = TransitionPhaseHandler<Ctx> | TransitionPhaseDefinition<Ctx>;
-
-type TransitionPlugin = {
-  enter?: TransitionPhaseLike<EnterTransitionContext>;
-  exit?: TransitionPhaseLike<ExitTransitionContext>;
-  move?: TransitionPhaseLike<MoveTransitionContext>;
-};
-```
-
-### 兼容写法：纯函数式 `TransitionPlugin`
-
-如果你需要完全控制 `Animation` 对象，函数式 phase 仍然完全可用：
-
-```typescript
-type TransitionBaseContext = {
-  element: Element;
-  parent: ParentBounds;
-};
-
-type EnterTransitionContext = TransitionBaseContext & {
-  rect: Rect;
-};
-
-type ExitTransitionContext = TransitionBaseContext & {
-  rect: Rect;
-  viewportRect: Rect;
-  anchorDelta: Point;
-  layoutMode: "absolute" | "flow";
-};
-
-type MoveTransitionContext = TransitionBaseContext & {
-  current: Rect;
-  previous: Rect;
-  delta: Point;
-  anchorDelta: Point;
-  scale: {
-    x: number;
-    y: number;
-  };
-};
-
-export type CompiledTransitionPlugin = {
-  enter?(ctx: EnterTransitionContext): Animation;
-  exit?(ctx: ExitTransitionContext): Animation;
-  move?(ctx: MoveTransitionContext): Animation;
-};
-```
-
-`move` 的 `ctx.delta` 和 `ctx.scale` 已经按标准 FLIP 几何预计算好了；如果父容器因为 `right` / `bottom` 锚定、同一微任务内的 remove / insert / reorder 组合，或 replacement 式的“删旧插新”而在整次提交前后发生净位移，`ctx.anchorDelta` 会额外给出这段测量基准补偿。
-
-### 自定义插件示例
-
-下面这个示例直接使用预计算的 `ctx.delta` 和 `ctx.scale`，同时在退出时根据 `ctx.layoutMode` 决定是否固定元素位置，并通过 `ctx.anchorDelta` 补偿当前批次提交前后测量基准产生的整体位移。
-
-```tsx
-import type { TransitionPlugin } from "@codehz/auto-transition";
-
-const floatingActionsTransition: TransitionPlugin = {
+const transition = defineTransition({
   enter({ element }) {
-    return element.animate(
-      {
-        opacity: [0, 1],
-        transform: ["translateY(8px) scale(0.96)", "translateY(0) scale(1)"],
-      },
-      { duration: 220, easing: "ease-out" },
-    );
+    return element.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: 180,
+      easing: "ease-out",
+    });
   },
   exit({ element, rect, anchorDelta, layoutMode }) {
-    const translate =
-      anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px) `;
-    const absoluteBase =
+    const baseFrames =
       layoutMode === "absolute"
-        ? {
-            position: "absolute" as const,
-            top: `${rect.y}px`,
-            left: `${rect.x}px`,
-            width: `${rect.width}px`,
-            height: `${rect.height}px`,
-            margin: "0",
-          }
-        : {};
+        ? [
+            {
+              position: "absolute",
+              top: `${rect.y}px`,
+              left: `${rect.x}px`,
+              width: `${rect.width}px`,
+              height: `${rect.height}px`,
+              margin: "0",
+            },
+            {
+              position: "absolute",
+              top: `${rect.y}px`,
+              left: `${rect.x}px`,
+              width: `${rect.width}px`,
+              height: `${rect.height}px`,
+              margin: "0",
+            },
+          ]
+        : [{}, {}];
+
+    const translate =
+      anchorDelta.x === 0 && anchorDelta.y === 0 ? "" : `translate(${anchorDelta.x}px, ${anchorDelta.y}px)`;
 
     return element.animate(
       [
         {
-          ...absoluteBase,
+          ...baseFrames[0],
           opacity: 1,
-          transform: `${translate}scale(1)`,
+          transform: translate,
         },
         {
-          ...absoluteBase,
+          ...baseFrames[1],
           opacity: 0,
-          transform: `${translate}scale(0.96)`,
+          transform: translate,
         },
       ],
-      { duration: 200, easing: "ease-in" },
+      { duration: 180, easing: "ease-in" },
     );
   },
   move({ element, delta, anchorDelta, scale }) {
     return element.animate(
-      {
-        transform: [
-          `translate(${delta.x + anchorDelta.x}px, ${delta.y + anchorDelta.y}px) scale(${scale.x}, ${scale.y})`,
-          "translate(0, 0) scale(1, 1)",
-        ],
-      },
-      { duration: 220, easing: "ease-in-out" },
+      [
+        {
+          transformOrigin: "0 0",
+          transform: `translate(${delta.x + anchorDelta.x}px, ${delta.y + anchorDelta.y}px) scale(${scale.x}, ${scale.y})`,
+        },
+        {
+          transformOrigin: "0 0",
+          transform: "translate(0, 0) scale(1, 1)",
+        },
+      ],
+      { duration: 240, easing: "ease-in" },
     );
   },
-};
+} satisfies TransitionPlugin);
 ```
 
-### 默认动画行为
+## 导出概览
 
-- **Enter**: 默认只做透明度淡入，不附带缩放 (250ms ease-out)。
-- **Exit**: 默认会根据 `exitLayout` 选择退出布局策略。`absolute` 会冻结元素当前的绝对定位并淡出；`flow` 会保持元素继续参与布局直到退出动画结束。两种模式下 `anchorDelta` 都会按同一微任务内整次提交前后的净位移统一结算 (250ms ease-in)。
-- **Move**: 使用标准 FLIP，通过基于当前位置的位移补偿配合缩放过渡；当父容器因 `right` / `bottom` 锚定或同批次布局变更而整体平移时，也会自动附加这段批次级位移补偿 (250ms ease-in)。
+根入口：
 
-如果提供了自定义 `transition`，对应的 `enter` / `exit` / `move` hook 或 effect phase 会优先于内置动画执行。
+- `AutoTransition`
+- `withAutoTransition`
+- `preset`
+- `effects`
+- `defineTransition`
+- `buildEnterContext`
+- `buildExitContext`
+- `buildMoveContext`
+- `getMoveGeometry`
+- `getScaleFactor`
+- 相关 context / plugin 类型
 
-如果你自定义了 `transition.exit` 或 `transition.move`，推荐把对应的 `ctx.anchorDelta` 合并进 `transform`。不使用这个字段时，普通布局依然可以正常工作，只是在绝对定位父容器通过 `right` / `bottom` 定位、或同批次 replacement / reorder 导致测量基准漂移的场景下不会自动获得位移补偿。replacement 仍然保持 `exit + enter` 语义，而不是旧新元素之间的 morph。
+子路径：
 
-## 许可证
-
-MIT
+- `@codehz/auto-transition/effects`
+  - `fade`
+  - `scale`
+  - `blur`
+  - `translate`
+  - `flip`
+  - `effects`

@@ -23,12 +23,8 @@ import {
   type TransitionPlugin,
 } from "./transitionTypes.ts";
 import { prepareNodeForExit, restorePreparedExitNode, type PreparedExitState } from "./exitLayout.ts";
-import {
-  defaultEnterTransition,
-  defaultExitTransition,
-  defaultMoveTransition,
-  normalizeTransition,
-} from "./transitionPresets.ts";
+import { defaultEnterTransition, defaultExitTransition, defaultMoveTransition } from "./preset.ts";
+import { normalizeTransition } from "./transitionPresets.ts";
 import { useForkRef } from "./useForkRef.ts";
 
 export {
@@ -62,33 +58,21 @@ export {
   defaultEnterTransition,
   defaultExitTransition,
   defaultMoveTransition,
-  defineTransition,
-  transitionEffects,
-  transitionPhases,
-  transitionPresets,
-  type CommonBlurEffectOptions,
-  type CommonFadeEffectOptions,
-  type CommonScaleEffectOptions,
-  type EnterFadeOptions,
-  type EnterFadeScaleOptions,
-  type EnterPopOptions,
-  type EnterSlideEffectOptions,
-  type EnterSlideFadeOptions,
-  type ExitAnchorTranslateEffectOptions,
-  type ExitAbsoluteFadeOptions,
-  type ExitAbsoluteFadeScaleOptions,
-  type ExitAbsoluteShrinkOptions,
-  type ExitAbsoluteSlideFadeOptions,
-  type ExitFadeOptions,
-  type ExitFadeScaleOptions,
-  type MoveFlipOptions,
-  type MoveFlipScaleEffectOptions,
-  type MoveFlipTranslateEffectOptions,
-  type MoveSmoothOptions,
-  type MoveTranslateOptions,
-  type ExitShrinkOptions,
-  type ExitSlideFadeOptions,
-} from "./transitionPresets.ts";
+  effects,
+  preset,
+  type PresetSpec,
+} from "./preset.ts";
+export { defineTransition } from "./transitionPresets.ts";
+export type {
+  BlurEffectOptions,
+  EnterEffect,
+  ExitEffect,
+  FadeEffectOptions,
+  FlipEffectOptions,
+  MoveEffect,
+  ScaleEffectOptions,
+  TranslateEffectOptions,
+} from "./effects.ts";
 
 type MeasuredParentRect = ParentBounds & {
   left: number;
@@ -160,9 +144,8 @@ type BatchState = {
  *  - exit: keep element size and position while fading out, 250ms ease-in
  *  - move: translate + scale from previous rect to new rect, 250ms ease-in
  *
- * The default enter/exit animations do not apply scale. If you want the
- * previous fade-scale behavior, use `transitionPresets.enter.fadeScale()`
- * and `transitionPresets.exit.absoluteFadeScale()`.
+ * The default enter/exit animations do not apply scale. Use the declarative
+ * `preset()` API when you want to add effects such as scale, blur, or translate.
  *
  * Notes:
  *  - This component is client-only (relies on DOM measurement & Web Animations API).
