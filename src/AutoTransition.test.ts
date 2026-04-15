@@ -538,6 +538,57 @@ describe("preset", () => {
     ]);
   });
 
+  test("supports percentage-based translate values", () => {
+    const enterTransition = defineTransition(
+      preset({
+        enter: effects.translate({ x: "50%", y: "-25%" }),
+      }),
+    );
+    const enter = createAnimatedElement();
+    enterTransition.enter?.(buildEnterContext(enter.animatedElement, currentRect, parent));
+    expect(enter.calls[0]?.keyframes).toEqual([
+      { offset: 0, transform: "translate(60px, -12.5px)" },
+      { offset: 1, transform: "translate(0, 0)" },
+    ]);
+
+    const exitTransition = defineTransition(
+      preset({
+        exit: [effects.fade(0), effects.translate({ x: "50%", y: "-20%" })],
+      }),
+    );
+    const exit = createAnimatedElement();
+    exitTransition.exit?.(
+      buildExitContext(exit.animatedElement, currentRect, parent, {
+        viewportRect,
+        anchorDelta,
+      }),
+    );
+    expect(exit.calls[0]?.keyframes).toEqual([
+      {
+        offset: 0,
+        position: "absolute",
+        opacity: 1,
+        transform: "translate(48px, 36px)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+      {
+        offset: 1,
+        position: "absolute",
+        opacity: 0,
+        transform: "translate(108px, 26px)",
+        width: "120px",
+        height: "50px",
+        margin: "0",
+        top: "60px",
+        left: "80px",
+      },
+    ]);
+  });
+
   test("supports numeric and string blur values", () => {
     const enterTransition = defineTransition(
       preset({

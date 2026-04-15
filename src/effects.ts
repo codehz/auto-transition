@@ -4,6 +4,7 @@ import type {
   MoveGeometry,
   MoveTransitionContext,
   Point,
+  RelativePoint,
   TransitionEffect,
 } from "./transitionTypes.ts";
 import {
@@ -48,8 +49,8 @@ export type BlurEffectOptions = {
 };
 
 export type TranslateEffectOptions = {
-  value?: Point;
-  keyframes?: ValueKeyframe<Point>[];
+  value?: RelativePoint;
+  keyframes?: ValueKeyframe<RelativePoint>[];
 };
 
 export type FlipEffectOptions = {
@@ -104,11 +105,31 @@ function normalizeBlurOptions(valueOrOptions: BlurValue | BlurEffectOptions | un
   return valueOrOptions;
 }
 
-function normalizeTranslateOptions(valueOrOptions: Point | TranslateEffectOptions): TranslateEffectOptions {
+function normalizeTranslateOptions(valueOrOptions: RelativePoint | TranslateEffectOptions): TranslateEffectOptions {
   if ("x" in valueOrOptions && "y" in valueOrOptions) {
     return { value: valueOrOptions };
   }
   return valueOrOptions;
+}
+
+function resolveAxisValue(value: RelativePoint["x"], size: number): number {
+  if (typeof value === "number") {
+    return value;
+  }
+
+  const matched = /^(-?\d+(?:\.\d+)?)%$/.exec(value.trim());
+  if (!matched) {
+    throw new Error(`translate() percentage must be a valid percent string, received "${value}"`);
+  }
+
+  return (Number.parseFloat(matched[1] ?? "0") / 100) * size;
+}
+
+function resolveTranslateValue(value: RelativePoint, ctx: EnterOrExitContext): Point {
+  return {
+    x: resolveAxisValue(value.x, ctx.rect.width),
+    y: resolveAxisValue(value.y, ctx.rect.height),
+  };
 }
 
 export function fade(value?: number): EnterEffect;
@@ -201,18 +222,20 @@ export function blur(valueOrOptions?: BlurValue | BlurEffectOptions): EnterEffec
   );
 }
 
-export function translate(value: Point): EnterEffect;
+export function translate(value: RelativePoint): EnterEffect;
 export function translate(options: TranslateEffectOptions): EnterEffect;
-export function translate(valueOrOptions: Point | TranslateEffectOptions): EnterEffect {
+export function translate(valueOrOptions: RelativePoint | TranslateEffectOptions): EnterEffect {
   const options = normalizeTranslateOptions(valueOrOptions);
 
   return withPhases(
     createTransitionEffect("translate()", (ctx: EnterOrExitContext) => {
-      const target = options.value ?? { x: 0, y: 0 };
+      const target = resolveTranslateValue(options.value ?? { x: 0, y: 0 }, ctx);
       const timeline = options.keyframes
         ? options.keyframes.map(({ offset, value }) => ({
             offset,
-            value: isExitContext(ctx) ? addPoints(ctx.anchorDelta, value) : value,
+            value: isExitContext(ctx)
+              ? addPoints(ctx.anchorDelta, resolveTranslateValue(value, ctx))
+              : resolveTranslateValue(value, ctx),
           }))
         : isExitContext(ctx)
           ? [

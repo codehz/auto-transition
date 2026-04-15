@@ -25,6 +25,15 @@ export type Point = {
   y: number;
 };
 
+export type Percentage = `${number}%`;
+
+export type LengthPercentage = number | Percentage;
+
+export type RelativePoint = {
+  x: LengthPercentage;
+  y: LengthPercentage;
+};
+
 export type ExitLayoutMode = "absolute" | "flow";
 
 export type ParentBounds = {

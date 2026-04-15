@@ -66,6 +66,7 @@ function Example({ children }: { children: React.ReactNode }) {
 
 - 用户只组织一层 `enter / exit / move`
 - `translate()` 只传一个偏移量 `{ x, y }`
+- `translate()` 支持像素数字和百分比字符串，例如 `{ x: "50%", y: 0 }`
 - `scale()` 常见场景只传一个数字
 - `blur()` 支持数字，自动转成 `px`
 - `exitLayout="absolute"` 和 `exitLayout="flow"` 共用同一套 exit authoring
@@ -141,6 +142,7 @@ blur("0.5rem");
 
 ```ts
 translate({ x: 0, y: 12 });
+translate({ x: "50%", y: "-25%" });
 translate({
   keyframes: [
     { offset: 0, value: { x: 0, y: 12 } },
@@ -151,6 +153,7 @@ translate({
 
 - `enter: translate({ x: 0, y: 12 })` 等价于 `{0,12} -> {0,0}`
 - `exit: translate({ x: 0, y: -8 })` 等价于 `{0,0} -> {0,-8}`
+- 百分比会按元素当前的 `width/height` 解析成像素
 - exit 时会自动叠加 `anchorDelta`
 
 ### `flip`
