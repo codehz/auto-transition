@@ -19,7 +19,7 @@ import {
   type TransitionPlugin,
 } from "./AutoTransition.tsx";
 import { blur, effects as effectsModule, fade, flip, scale, translate, type MoveEffect } from "./effects.ts";
-import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
+import { hasRectChanged, planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 import { prepareNodeForExit, restorePreparedExitNode } from "./exitLayout.ts";
 
 const element = { id: "demo" } as unknown as Element;
@@ -901,5 +901,27 @@ describe("planBatchAnimations", () => {
     expect(plan.moves).toEqual([]);
     expect(plan.enters).toEqual([]);
     expect(plan.exits).toEqual([]);
+  });
+
+  test("ignores sub-pixel rect noise when deciding moves", () => {
+    const stableNode = { id: "stable" };
+    const noisyRect: Rect = {
+      x: currentRect.x + 0.25,
+      y: currentRect.y - 0.4,
+      width: currentRect.width + 0.1,
+      height: currentRect.height,
+    };
+    const before = createSnapshot(batchParent, [[stableNode, currentRect]]);
+    const after = createSnapshot(batchParent, [[stableNode, noisyRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [stableNode],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(hasRectChanged(noisyRect, currentRect)).toBe(false);
+    expect(plan.moves).toEqual([]);
   });
 });

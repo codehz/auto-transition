@@ -64,12 +64,19 @@ export function getBatchAnchorDelta(
   };
 }
 
-export function hasRectChanged(current: Rect, previous: Rect): boolean {
+/** Sub-pixel threshold used to ignore browser layout noise. */
+export const RECT_CHANGE_EPSILON = 0.5;
+
+function hasSignificantDelta(current: number, previous: number, epsilon = RECT_CHANGE_EPSILON): boolean {
+  return Math.abs(current - previous) > epsilon;
+}
+
+export function hasRectChanged(current: Rect, previous: Rect, epsilon = RECT_CHANGE_EPSILON): boolean {
   return (
-    current.x !== previous.x ||
-    current.y !== previous.y ||
-    current.width !== previous.width ||
-    current.height !== previous.height
+    hasSignificantDelta(current.x, previous.x, epsilon) ||
+    hasSignificantDelta(current.y, previous.y, epsilon) ||
+    hasSignificantDelta(current.width, previous.width, epsilon) ||
+    hasSignificantDelta(current.height, previous.height, epsilon)
   );
 }
 
@@ -87,6 +94,7 @@ export function planBatchAnimations<T>({
   pendingExits: ReadonlyMap<T, PendingExitRecord<T>>;
 }): BatchAnimationPlan<T> {
   const anchorDelta = getBatchAnchorDelta(before.parent, after.parent);
+  const hasAnchorShift = Math.abs(anchorDelta.x) > RECT_CHANGE_EPSILON || Math.abs(anchorDelta.y) > RECT_CHANGE_EPSILON;
   const moves: PlannedMove<T>[] = [];
   const enters: PlannedEnter<T>[] = [];
 
@@ -96,7 +104,7 @@ export function planBatchAnimations<T>({
 
     const previous = before.rects.get(node);
     if (previous) {
-      if (hasRectChanged(current, previous) || anchorDelta.x !== 0 || anchorDelta.y !== 0) {
+      if (hasRectChanged(current, previous) || hasAnchorShift) {
         moves.push({ node, current, previous, anchorDelta });
       }
       continue;
