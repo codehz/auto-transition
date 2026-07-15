@@ -187,7 +187,9 @@ export function AutoTransition<T extends ElementType | undefined>({
   useEffect(() => {
     const resolvedTransition = normalizeTransition(transition);
     const exiting = new Set<Element>();
+    const activeAnimations = new Map<Element, Animation>();
     let batch: BatchState | null = null;
+    let disposed = false;
     const target = ref.current!;
     if (patch) {
       patchActivity(target);
@@ -198,6 +200,44 @@ export function AutoTransition<T extends ElementType | undefined>({
     while (styles.display === "contents" || (styles.position === "static" && measureTarget !== document.body)) {
       measureTarget = measureTarget.parentElement!;
       styles = getComputedStyle(measureTarget);
+    }
+
+    function cancelAnimation(animation: Animation) {
+      try {
+        animation.cancel();
+      } catch {
+        // Ignore environments where cancel is unavailable or already settled.
+      }
+    }
+
+    function trackAnimation(node: Element, animation: Animation, onFinish?: () => void) {
+      const previous = activeAnimations.get(node);
+      if (previous && previous !== animation) {
+        cancelAnimation(previous);
+      }
+      activeAnimations.set(node, animation);
+
+      const clearTracking = () => {
+        if (activeAnimations.get(node) === animation) {
+          activeAnimations.delete(node);
+        }
+      };
+
+      animation.finished
+        .then(() => {
+          clearTracking();
+          onFinish?.();
+        })
+        .catch(() => {
+          clearTracking();
+          // Cancelled animations should not run finish side effects (e.g. exit DOM removal).
+          // Unmount cleanup force-removes any remaining exiting nodes instead.
+          if (!disposed) {
+            exiting.delete(node);
+          }
+        });
+
+      return animation;
     }
 
     function measureParentRect(): MeasuredParentRect {
@@ -238,7 +278,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       batch = nextBatch;
 
       queueMicrotask(() => {
-        if (batch !== nextBatch) return;
+        if (batch !== nextBatch || disposed) return;
         batch = null;
         flushBatch(nextBatch);
       });
@@ -342,6 +382,21 @@ export function AutoTransition<T extends ElementType | undefined>({
     };
 
     return () => {
+      disposed = true;
+      batch = null;
+
+      for (const animation of activeAnimations.values()) {
+        cancelAnimation(animation);
+      }
+      activeAnimations.clear();
+
+      for (const node of exiting) {
+        if (node.parentNode === target) {
+          Element.prototype.removeChild.call(target, node);
+        }
+      }
+      exiting.clear();
+
       target.removeChild = Element.prototype.removeChild;
       target.insertBefore = Element.prototype.insertBefore;
       target.appendChild = Element.prototype.appendChild;
@@ -361,21 +416,20 @@ export function AutoTransition<T extends ElementType | undefined>({
         layoutMode: exitLayout,
       });
       const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
-      const finalize = () => {
+      return trackAnimation(node, animation, () => {
         exiting.delete(node);
         if (node.parentNode === target) {
           Element.prototype.removeChild.call(target, node);
         }
-      };
-      animation.finished.then(finalize).catch(finalize);
-      return animation;
+      });
     }
 
     function animateNodeEnter(node: Element, rect?: Rect, parent?: MeasuredParentRect) {
       const currentParent = parent ?? measureParentRect();
       const currentRect = rect ?? getRelativePosition(node, currentParent);
       const context = buildEnterContext(node, currentRect, toParentBounds(currentParent));
-      return resolvedTransition?.enter ? resolvedTransition.enter(context) : defaultEnterTransition(context);
+      const animation = resolvedTransition?.enter ? resolvedTransition.enter(context) : defaultEnterTransition(context);
+      return trackAnimation(node, animation);
     }
 
     function animateNodeMove(
@@ -388,7 +442,8 @@ export function AutoTransition<T extends ElementType | undefined>({
       },
     ) {
       const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent), options);
-      return resolvedTransition?.move ? resolvedTransition.move(context) : defaultMoveTransition(context);
+      const animation = resolvedTransition?.move ? resolvedTransition.move(context) : defaultMoveTransition(context);
+      return trackAnimation(node, animation);
     }
 
     function getRelativePosition(node: Element, parent = measureParentRect()): Rect {
