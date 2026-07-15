@@ -121,6 +121,10 @@ function getViewportRect(rect: DOMRectReadOnly): Rect {
   };
 }
 
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 type SnapshotState = BatchSnapshot<Element>;
 
 type PendingExitState = PendingExitRecord<Element> & {
@@ -236,9 +240,6 @@ export function AutoTransition<T extends ElementType | undefined>({
           clearTracking();
           // Cancelled animations should not run finish side effects (e.g. exit DOM removal).
           // Unmount cleanup force-removes any remaining exiting nodes instead.
-          if (!disposed) {
-            exiting.delete(node);
-          }
         });
 
       return animation;
@@ -422,6 +423,13 @@ export function AutoTransition<T extends ElementType | undefined>({
       target.appendChild = Element.prototype.appendChild;
     };
 
+    function finalizeExitNode(node: Element) {
+      exiting.delete(node);
+      if (node.parentNode === target) {
+        Element.prototype.removeChild.call(target, node);
+      }
+    }
+
     function animateNodeExit(
       node: Element,
       rect: Rect,
@@ -431,21 +439,25 @@ export function AutoTransition<T extends ElementType | undefined>({
         anchorDelta?: Point;
       },
     ) {
+      if (prefersReducedMotion()) {
+        finalizeExitNode(node);
+        return;
+      }
+
       const context = buildExitContext(node, rect, toParentBounds(parent), {
         ...options,
         layoutMode: exitLayout,
       });
       const resolvedTransition = transitionRef.current;
       const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
-      return trackAnimation(node, animation, () => {
-        exiting.delete(node);
-        if (node.parentNode === target) {
-          Element.prototype.removeChild.call(target, node);
-        }
-      });
+      return trackAnimation(node, animation, () => finalizeExitNode(node));
     }
 
     function animateNodeEnter(node: Element, rect?: Rect, parent?: MeasuredParentRect) {
+      if (prefersReducedMotion()) {
+        return;
+      }
+
       const currentParent = parent ?? measureParentRect();
       const currentRect = rect ?? getRelativePosition(node, currentParent);
       const context = buildEnterContext(node, currentRect, toParentBounds(currentParent));
@@ -463,6 +475,10 @@ export function AutoTransition<T extends ElementType | undefined>({
         anchorDelta?: Point;
       },
     ) {
+      if (prefersReducedMotion()) {
+        return;
+      }
+
       const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent), options);
       const resolvedTransition = transitionRef.current;
       const animation = resolvedTransition?.move ? resolvedTransition.move(context) : defaultMoveTransition(context);
