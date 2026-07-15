@@ -16,6 +16,7 @@ import {
   buildEnterContext,
   buildExitContext,
   buildMoveContext,
+  type CompiledTransitionPlugin,
   type ExitLayoutMode,
   type ParentBounds,
   type Point,
@@ -183,9 +184,12 @@ export function AutoTransition<T extends ElementType | undefined>({
 }: AutoTransitionProps<T>) {
   const Component = as ?? Slot;
   const ref = useRef<HTMLElement>(null);
+  // Keep latest transition without reinstalling DOM interceptors when the
+  // caller passes an inline plugin object each render.
+  const transitionRef = useRef<CompiledTransitionPlugin | undefined>(normalizeTransition(transition));
+  transitionRef.current = normalizeTransition(transition);
 
   useEffect(() => {
-    const resolvedTransition = normalizeTransition(transition);
     const exiting = new Set<Element>();
     const activeAnimations = new Map<Element, Animation>();
     let batch: BatchState | null = null;
@@ -415,6 +419,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         ...options,
         layoutMode: exitLayout,
       });
+      const resolvedTransition = transitionRef.current;
       const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
       return trackAnimation(node, animation, () => {
         exiting.delete(node);
@@ -428,6 +433,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       const currentParent = parent ?? measureParentRect();
       const currentRect = rect ?? getRelativePosition(node, currentParent);
       const context = buildEnterContext(node, currentRect, toParentBounds(currentParent));
+      const resolvedTransition = transitionRef.current;
       const animation = resolvedTransition?.enter ? resolvedTransition.enter(context) : defaultEnterTransition(context);
       return trackAnimation(node, animation);
     }
@@ -442,6 +448,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       },
     ) {
       const context = buildMoveContext(node, rect, oldRect, toParentBounds(parent), options);
+      const resolvedTransition = transitionRef.current;
       const animation = resolvedTransition?.move ? resolvedTransition.move(context) : defaultMoveTransition(context);
       return trackAnimation(node, animation);
     }
@@ -455,7 +462,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         height: rect.height,
       };
     }
-  }, [exitLayout, patch, transition]);
+  }, [exitLayout, patch]);
 
   const forkedRef = useForkRef(ref, externalRef);
   return (
