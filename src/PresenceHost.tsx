@@ -19,6 +19,7 @@ class AutoPresenceElement extends HTMLElement {
   #cleanup?: () => void;
 
   set "presence-ref"(value: PresenceRef | undefined) {
+    if (this.#presenceRef === value) return;
     this.#presenceRef = value;
     if (this.#cleanup) {
       this.#cleanup();
