@@ -195,9 +195,7 @@ export function AutoTransition<T extends ElementType | undefined>({
     let batch: BatchState | null = null;
     let disposed = false;
     const target = ref.current!;
-    if (patch) {
-      patchActivity(target);
-    }
+    const disposeActivityPatch = patch ? patchActivity(target) : undefined;
 
     let measureTarget = target;
     let styles = getComputedStyle(measureTarget);
@@ -400,6 +398,8 @@ export function AutoTransition<T extends ElementType | undefined>({
         }
       }
       exiting.clear();
+
+      disposeActivityPatch?.();
 
       target.removeChild = Element.prototype.removeChild;
       target.insertBefore = Element.prototype.insertBefore;
