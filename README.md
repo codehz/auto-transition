@@ -211,6 +211,37 @@ declare function preset(spec: PresetSpec): TransitionPlugin;
 
 新版 declarative API 不需要为这两种模式分别写两套 preset。运行时会自动根据 `exitLayout` 决定是否注入 absolute layout keyframes。
 
+## `patch`（React Activity 兼容）
+
+React `<Activity mode="hidden">` 不会卸载子树，而是给 host 节点写 `display: none`。  
+这会绕过 `AutoTransition` 基于 `removeChild` 的 exit 拦截，导致退出动画播不出来。
+
+`patch` 用来拦截这种隐藏方式：
+
+```tsx
+// 兼容旧行为：只把 display:none 映射为 inert，不播动画
+<AutoTransition patch />
+<AutoTransition patch="inert" />
+
+// 推荐：隐藏时播 exit，显示时播 enter，动画结束后再真正隐藏
+<AutoTransition patch="exit" transition={cardTransition}>
+  <Activity mode={open ? "visible" : "hidden"}>
+    <Panel />
+  </Activity>
+</AutoTransition>
+```
+
+| 值                 | 行为                                                                        |
+| ------------------ | --------------------------------------------------------------------------- |
+| `true` / `"inert"` | `display: none` → `inert`，节点保持可绘制，但不驱动 enter/exit              |
+| `"exit"`           | hide 时播 exit，完成后写入真正的 `display: none`；show 时清除隐藏并播 enter |
+
+说明：
+
+- `patch="exit"` **不会**把节点从 DOM 移除（Activity 需要保持子树挂载）
+- 动画仍然走 `transition` / 默认 fade
+- 与 `exitLayout` 兼容：exit 过程中仍可 absolute 冻结布局
+
 ## Imperative Escape Hatch
 
 如果 declarative `preset()` 还不够，可以继续直接写 `TransitionPlugin` 或用 `defineTransition()` 编译：

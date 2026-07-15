@@ -10,7 +10,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { patchActivity } from "./ActivityPatch.tsx";
+import { patchActivity, resolvePatchMode, type ActivityPatchMode } from "./ActivityPatch.tsx";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 import {
   buildEnterContext,
@@ -58,6 +58,7 @@ export {
   type TransitionPlugin,
   type TransitionTiming,
 } from "./transitionTypes.ts";
+export type { ActivityPatchMode } from "./ActivityPatch.tsx";
 export {
   defaultEnterTransition,
   defaultExitTransition,
@@ -92,7 +93,12 @@ type AutoTransitionBaseProps<T extends ElementType | undefined> = {
   as?: T;
   transition?: TransitionPlugin;
   exitLayout?: ExitLayoutMode;
-  patch?: boolean;
+  /**
+   * React Activity compatibility.
+   * - `true` / `"inert"`: map `display: none` to `inert` only (legacy behavior)
+   * - `"exit"`: play exit on hide and enter on show, then apply real hide styles
+   */
+  patch?: boolean | ActivityPatchMode;
   ref?: ForwardedRef<HTMLElement>;
 };
 
@@ -197,11 +203,13 @@ export function AutoTransition<T extends ElementType | undefined>({
 
   useEffect(() => {
     const exiting = new Set<Element>();
+    const activityHidden = new Set<Element>();
+    const activityPreparedExits = new Map<Element, PreparedExitState>();
     const activeAnimations = new Map<Element, Animation>();
     let batch: BatchState | null = null;
     let disposed = false;
     const target = ref.current!;
-    const disposeActivityPatch = patch ? patchActivity(target) : undefined;
+    const patchMode = resolvePatchMode(patch);
 
     let measureTarget = target;
     let styles = getComputedStyle(measureTarget);
@@ -245,6 +253,89 @@ export function AutoTransition<T extends ElementType | undefined>({
       return animation;
     }
 
+    function waitForAnimation(animation: Animation | undefined): Promise<void> {
+      if (!animation) return Promise.resolve();
+      return animation.finished.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+
+    function restoreActivityPreparedExit(node: Element) {
+      const preparedExit = activityPreparedExits.get(node);
+      if (!preparedExit) return;
+      restorePreparedExitNode(node, preparedExit);
+      activityPreparedExits.delete(node);
+    }
+
+    function animateActivityExit(node: HTMLElement): Promise<void> {
+      if (disposed) return Promise.resolve();
+      if (prefersReducedMotion()) {
+        restoreActivityPreparedExit(node);
+        activityHidden.add(node);
+        return Promise.resolve();
+      }
+
+      const parent = measureParentRect();
+      const rect = getRelativePosition(node, parent);
+      const viewportRect = getViewportRect(node.getBoundingClientRect());
+      restoreActivityPreparedExit(node);
+      const preparedExit = prepareNodeForExit(node, rect, exitLayout);
+      activityPreparedExits.set(node, preparedExit);
+
+      const context = buildExitContext(node, rect, toParentBounds(parent), {
+        viewportRect,
+        layoutMode: exitLayout,
+      });
+      const resolvedTransition = transitionRef.current;
+      const animation = resolvedTransition?.exit ? resolvedTransition.exit(context) : defaultExitTransition(context);
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const settle = (markHidden: boolean) => {
+          if (settled) return;
+          settled = true;
+          if (markHidden) {
+            restoreActivityPreparedExit(node);
+            activityHidden.add(node);
+          }
+          resolve();
+        };
+
+        trackAnimation(node, animation, () => settle(true));
+        // Cancellation (e.g. reverse to show) resolves without marking hidden;
+        // ActivityPatch generation invalidates the deferred final hide.
+        animation.finished.catch(() => settle(false));
+      });
+    }
+
+    function animateActivityEnter(node: HTMLElement): Promise<void> {
+      if (disposed) return Promise.resolve();
+      activityHidden.delete(node);
+      restoreActivityPreparedExit(node);
+
+      if (prefersReducedMotion()) {
+        return Promise.resolve();
+      }
+
+      const parent = measureParentRect();
+      const rect = getRelativePosition(node, parent);
+      const context = buildEnterContext(node, rect, toParentBounds(parent));
+      const resolvedTransition = transitionRef.current;
+      const animation = resolvedTransition?.enter ? resolvedTransition.enter(context) : defaultEnterTransition(context);
+      trackAnimation(node, animation);
+      return waitForAnimation(animation);
+    }
+
+    const disposeActivityPatch =
+      patchMode === undefined
+        ? undefined
+        : patchActivity(target, {
+            mode: patchMode,
+            onHide: patchMode === "exit" ? (node) => animateActivityExit(node) : undefined,
+            onShow: patchMode === "exit" ? (node) => animateActivityEnter(node) : undefined,
+          });
+
     function measureParentRect(): MeasuredParentRect {
       const borderBox = measureTarget.getBoundingClientRect();
       const currentStyles = getComputedStyle(measureTarget);
@@ -264,7 +355,15 @@ export function AutoTransition<T extends ElementType | undefined>({
       const parent = measureParentRect();
       const rects = new Map<Element, Rect>();
       for (const child of target.children) {
-        if (!(child instanceof Element) || exiting.has(child)) continue;
+        if (
+          !(child instanceof Element) ||
+          exiting.has(child) ||
+          activityHidden.has(child) ||
+          // Mid activity exit: node is layout-locked and should not join FLIP.
+          activityPreparedExits.has(child)
+        ) {
+          continue;
+        }
         rects.set(child, getRelativePosition(child, parent));
       }
       return { parent, rects };
@@ -415,6 +514,11 @@ export function AutoTransition<T extends ElementType | undefined>({
         }
       }
       exiting.clear();
+
+      for (const node of activityPreparedExits.keys()) {
+        restoreActivityPreparedExit(node);
+      }
+      activityHidden.clear();
 
       disposeActivityPatch?.();
 
