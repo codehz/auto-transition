@@ -131,6 +131,8 @@ type BatchState = {
   before: SnapshotState;
   pendingExits: Map<Element, PendingExitState>;
   pendingEnters: Set<Element>;
+  /** True when an Element child was inserted/removed/reordered in this batch. */
+  hasElementMutation: boolean;
 };
 
 /**
@@ -276,6 +278,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         before: captureSnapshot(),
         pendingExits: new Map<Element, PendingExitState>(),
         pendingEnters: new Set<Element>(),
+        hasElementMutation: false,
       };
       batch = nextBatch;
 
@@ -289,6 +292,16 @@ export function AutoTransition<T extends ElementType | undefined>({
     }
 
     function flushBatch(activeBatch: BatchState) {
+      // Text-only DOM ops still open a batch for sibling FLIP readiness, but if
+      // no element was inserted/removed/reordered there is nothing to animate.
+      if (
+        !activeBatch.hasElementMutation &&
+        activeBatch.pendingEnters.size === 0 &&
+        activeBatch.pendingExits.size === 0
+      ) {
+        return;
+      }
+
       const after = captureSnapshot();
       const finalNodes = Array.from(after.rects.keys());
       const plan = planBatchAnimations({
@@ -322,6 +335,7 @@ export function AutoTransition<T extends ElementType | undefined>({
         if (exiting.has(node)) return node;
 
         const activeBatch = ensureBatch();
+        activeBatch.hasElementMutation = true;
         if (activeBatch.pendingEnters.delete(node) && !activeBatch.before.rects.has(node)) {
           if (node.parentNode === target) {
             Element.prototype.removeChild.call(target, node);
@@ -350,6 +364,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (!(node instanceof Element)) {
         return Element.prototype.insertBefore.call(this, node, child) as T;
       }
+      activeBatch.hasElementMutation = true;
       const inserted = Element.prototype.insertBefore.call(this, node, child) as T;
       const pendingExit = activeBatch.pendingExits.get(node);
       if (pendingExit) {
@@ -369,6 +384,7 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (!(node instanceof Element)) {
         return Element.prototype.appendChild.call(this, node) as T;
       }
+      activeBatch.hasElementMutation = true;
       const appended = Element.prototype.appendChild.call(this, node) as T;
       const pendingExit = activeBatch.pendingExits.get(node);
       if (pendingExit) {
