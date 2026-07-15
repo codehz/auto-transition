@@ -163,15 +163,29 @@ export function buildMoveContext(
   };
 }
 
+function isFiniteNumber(value: number): boolean {
+  return Number.isFinite(value);
+}
+
+/**
+ * FLIP scale factor `previous / current`. Zero or non-finite current sizes
+ * collapse to identity so invert transforms stay well-defined.
+ */
 export function getScaleFactor(previous: number, current: number): number {
-  return current === 0 ? 1 : previous / current;
+  if (!isFiniteNumber(previous) || !isFiniteNumber(current) || current === 0) {
+    return 1;
+  }
+  const factor = previous / current;
+  return isFiniteNumber(factor) ? factor : 1;
 }
 
 export function getMoveGeometry(current: Rect, previous: Rect): MoveGeometry {
+  const deltaX = previous.x - current.x;
+  const deltaY = previous.y - current.y;
   return {
     delta: {
-      x: previous.x - current.x,
-      y: previous.y - current.y,
+      x: isFiniteNumber(deltaX) ? deltaX : 0,
+      y: isFiniteNumber(deltaY) ? deltaY : 0,
     },
     scale: {
       x: getScaleFactor(previous.width, current.width),

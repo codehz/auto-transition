@@ -13,6 +13,13 @@ import {
 import { patchActivity, resolvePatchMode, type ActivityPatchMode } from "./ActivityPatch.tsx";
 import { planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
 import {
+  createMutationLedger,
+  isLedgerEmpty,
+  noteElementInsert,
+  noteElementRemove,
+  type MutationLedger,
+} from "./mutationLedger.ts";
+import {
   buildEnterContext,
   buildExitContext,
   buildMoveContext,
@@ -133,16 +140,12 @@ function prefersReducedMotion(): boolean {
 
 type SnapshotState = BatchSnapshot<Element>;
 
-type PendingExitState = PendingExitRecord<Element> & {
-  preparedExit: PreparedExitState;
-};
+/** Exit intent recorded during the batch; freeze happens at flush (scheme A). */
+type PendingExitState = PendingExitRecord<Element>;
 
 type BatchState = {
   before: SnapshotState;
-  pendingExits: Map<Element, PendingExitState>;
-  pendingEnters: Set<Element>;
-  /** True when an Element child was inserted/removed/reordered in this batch. */
-  hasElementMutation: boolean;
+  ledger: MutationLedger<Element, PendingExitState>;
 };
 
 /**
@@ -197,9 +200,14 @@ export function AutoTransition<T extends ElementType | undefined>({
   const Component = as ?? Slot;
   const ref = useRef<HTMLElement>(null);
   // Keep latest transition without reinstalling DOM interceptors when the
-  // caller passes an inline plugin object each render.
+  // caller passes an inline plugin object each render. Recompile only when the
+  // plugin identity changes; stable module-scope presets hit a WeakMap cache.
+  const transitionSourceRef = useRef(transition);
   const transitionRef = useRef<CompiledTransitionPlugin | undefined>(normalizeTransition(transition));
-  transitionRef.current = normalizeTransition(transition);
+  if (transitionSourceRef.current !== transition) {
+    transitionSourceRef.current = transition;
+    transitionRef.current = normalizeTransition(transition);
+  }
 
   useEffect(() => {
     const exiting = new Set<Element>();
@@ -376,9 +384,7 @@ export function AutoTransition<T extends ElementType | undefined>({
 
       const nextBatch: BatchState = {
         before: captureSnapshot(),
-        pendingExits: new Map<Element, PendingExitState>(),
-        pendingEnters: new Set<Element>(),
-        hasElementMutation: false,
+        ledger: createMutationLedger<Element, PendingExitState>(),
       };
       batch = nextBatch;
 
@@ -391,25 +397,36 @@ export function AutoTransition<T extends ElementType | undefined>({
       return nextBatch;
     }
 
+    /**
+     * Flush scheme A (read/write separation within the batch):
+     * 1. Commit exit freezes in one write burst (absolute exits leave flow).
+     * 2. Capture `after` snapshot (single read burst).
+     * 3. Plan enter/exit/move, then play.
+     *
+     * Batch-time remove/insert only mutates the ledger — no layout writes.
+     */
     function flushBatch(activeBatch: BatchState) {
       // Text-only DOM ops still open a batch for sibling FLIP readiness, but if
       // no element was inserted/removed/reordered there is nothing to animate.
-      if (
-        !activeBatch.hasElementMutation &&
-        activeBatch.pendingEnters.size === 0 &&
-        activeBatch.pendingExits.size === 0
-      ) {
+      if (isLedgerEmpty(activeBatch.ledger)) {
         return;
       }
 
+      // Write phase: freeze pending exits so absolute layout matches final occupancy
+      // before measuring siblings for move FLIP.
+      for (const exit of activeBatch.ledger.pendingExits.values()) {
+        prepareNodeForExit(exit.node, exit.rect, exitLayout);
+      }
+
+      // Read phase: measure final geometry after exit freezes (and React DOM ops).
       const after = captureSnapshot();
       const finalNodes = Array.from(after.rects.keys());
       const plan = planBatchAnimations({
         before: activeBatch.before,
         after,
         finalNodes,
-        pendingEnters: activeBatch.pendingEnters,
-        pendingExits: activeBatch.pendingExits,
+        pendingEnters: activeBatch.ledger.pendingEnters,
+        pendingExits: activeBatch.ledger.pendingExits,
       });
 
       for (const move of plan.moves) {
@@ -432,27 +449,29 @@ export function AutoTransition<T extends ElementType | undefined>({
 
     target.removeChild = function removeChild<T extends Node>(node: T) {
       if (node instanceof Element) {
-        if (exiting.has(node)) return node;
-
         const activeBatch = ensureBatch();
-        activeBatch.hasElementMutation = true;
-        if (activeBatch.pendingEnters.delete(node) && !activeBatch.before.rects.has(node)) {
+        const result = noteElementRemove(activeBatch.ledger, node, {
+          wasPresentBefore: activeBatch.before.rects.has(node),
+          isAlreadyExiting: exiting.has(node),
+          createExitMeta: () => {
+            const rect = activeBatch.before.rects.get(node) ?? getRelativePosition(node, activeBatch.before.parent);
+            const viewportRect = getViewportRect(node.getBoundingClientRect());
+            return { node, rect, viewportRect };
+          },
+        });
+
+        if (result.action === "already-exiting") {
+          return node;
+        }
+        if (result.action === "drop-transient-enter") {
           if (node.parentNode === target) {
             Element.prototype.removeChild.call(target, node);
           }
           return node;
         }
 
-        const rect = activeBatch.before.rects.get(node) ?? getRelativePosition(node, activeBatch.before.parent);
-        const viewportRect = getViewportRect(node.getBoundingClientRect());
-        const preparedExit = prepareNodeForExit(node, rect, exitLayout);
+        // schedule-exit: keep node in DOM until animation finishes; freeze at flush.
         exiting.add(node);
-        activeBatch.pendingExits.set(node, {
-          node,
-          rect,
-          viewportRect,
-          preparedExit,
-        });
         return node;
       }
       ensureBatch();
@@ -464,17 +483,13 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (!(node instanceof Element)) {
         return Element.prototype.insertBefore.call(this, node, child) as T;
       }
-      activeBatch.hasElementMutation = true;
       const inserted = Element.prototype.insertBefore.call(this, node, child) as T;
-      const pendingExit = activeBatch.pendingExits.get(node);
-      if (pendingExit) {
-        activeBatch.pendingExits.delete(node);
+      const result = noteElementInsert(activeBatch.ledger, node, {
+        wasPresentBefore: activeBatch.before.rects.has(node),
+      });
+      if (result.action === "cancel-exit") {
+        // Exit was never frozen during the batch (scheme A), so no style restore.
         exiting.delete(node);
-        restorePreparedExitNode(node, pendingExit.preparedExit);
-        return inserted;
-      }
-      if (!activeBatch.before.rects.has(node)) {
-        activeBatch.pendingEnters.add(node);
       }
       return inserted;
     };
@@ -484,17 +499,12 @@ export function AutoTransition<T extends ElementType | undefined>({
       if (!(node instanceof Element)) {
         return Element.prototype.appendChild.call(this, node) as T;
       }
-      activeBatch.hasElementMutation = true;
       const appended = Element.prototype.appendChild.call(this, node) as T;
-      const pendingExit = activeBatch.pendingExits.get(node);
-      if (pendingExit) {
-        activeBatch.pendingExits.delete(node);
+      const result = noteElementInsert(activeBatch.ledger, node, {
+        wasPresentBefore: activeBatch.before.rects.has(node),
+      });
+      if (result.action === "cancel-exit") {
         exiting.delete(node);
-        restorePreparedExitNode(node, pendingExit.preparedExit);
-        return appended;
-      }
-      if (!activeBatch.before.rects.has(node)) {
-        activeBatch.pendingEnters.add(node);
       }
       return appended;
     };

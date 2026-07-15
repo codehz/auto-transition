@@ -410,9 +410,18 @@ export function defineTransition(transition: TransitionPlugin): CompiledTransiti
   };
 }
 
+/** Cache compiled plugins by source object identity (stable module-scope presets). */
+const compiledTransitionCache = new WeakMap<TransitionPlugin, CompiledTransitionPlugin>();
+
 export function normalizeTransition(transition: TransitionPlugin | undefined): CompiledTransitionPlugin | undefined {
   if (!transition) {
     return undefined;
   }
-  return defineTransition(transition);
+  const cached = compiledTransitionCache.get(transition);
+  if (cached) {
+    return cached;
+  }
+  const compiled = defineTransition(transition);
+  compiledTransitionCache.set(transition, compiled);
+  return compiled;
 }

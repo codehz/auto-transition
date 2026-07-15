@@ -20,8 +20,15 @@ import {
   type TransitionPlugin,
 } from "./AutoTransition.tsx";
 import { blur, effects as effectsModule, fade, flip, scale, translate, type MoveEffect } from "./effects.ts";
-import { hasRectChanged, planBatchAnimations, type BatchSnapshot, type PendingExitRecord } from "./batchPlan.ts";
+import {
+  getCompensatedMoveTranslate,
+  hasRectChanged,
+  planBatchAnimations,
+  type BatchSnapshot,
+  type PendingExitRecord,
+} from "./batchPlan.ts";
 import { prepareNodeForExit, restorePreparedExitNode } from "./exitLayout.ts";
+import { createMutationLedger, isLedgerEmpty, noteElementInsert, noteElementRemove } from "./mutationLedger.ts";
 
 const element = { id: "demo" } as unknown as Element;
 const parent: ParentBounds = { width: 300, height: 200 };
@@ -782,10 +789,23 @@ describe("geometry helpers", () => {
     expect(getScaleFactor(180, 0)).toBe(1);
   });
 
+  test("guards non-finite dimensions", () => {
+    expect(getScaleFactor(180, Number.NaN)).toBe(1);
+    expect(getScaleFactor(Number.POSITIVE_INFINITY, 120)).toBe(1);
+    expect(getMoveGeometry({ ...currentRect, x: Number.NaN }, previousRect).delta.x).toBe(0);
+  });
+
   test("computes standard FLIP move geometry", () => {
     expect(getMoveGeometry(currentRect, previousRect)).toEqual({
       delta: { x: -40, y: -40 },
       scale: { x: 1.5, y: 1.8 },
+    });
+  });
+
+  test("compensated move translate matches flip formula (previous - current) + anchorDelta", () => {
+    expect(getCompensatedMoveTranslate(currentRect, previousRect, anchorDelta)).toEqual({
+      x: previousRect.x - currentRect.x + anchorDelta.x,
+      y: previousRect.y - currentRect.y + anchorDelta.y,
     });
   });
 });
@@ -924,6 +944,178 @@ describe("planBatchAnimations", () => {
 
     expect(hasRectChanged(noisyRect, currentRect)).toBe(false);
     expect(plan.moves).toEqual([]);
+  });
+
+  test("parent-only shift with unchanged child relative rect still schedules move via anchorDelta", () => {
+    // Contract 1 + geometry: relative rect unchanged, parent origin shifted.
+    const stableNode = { id: "stable-relative" };
+    const before = createSnapshot({ ...batchParent, left: 100, top: 50 }, [[stableNode, currentRect]]);
+    const after = createSnapshot({ ...batchParent, left: 60, top: 20 }, [[stableNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [stableNode],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves).toHaveLength(1);
+    expect(plan.moves[0]?.anchorDelta).toEqual({ x: 40, y: 30 });
+    expect(getCompensatedMoveTranslate(currentRect, currentRect, plan.moves[0]!.anchorDelta)).toEqual({
+      x: 40,
+      y: 30,
+    });
+  });
+
+  test("parent shift plus child relative displacement stack into one compensated translate", () => {
+    const movedNode = { id: "stacked" };
+    const before = createSnapshot({ ...batchParent, left: 100, top: 50 }, [[movedNode, previousRect]]);
+    const after = createSnapshot({ ...batchParent, left: 52, top: 14 }, [[movedNode, currentRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [movedNode],
+      pendingEnters: new Set(),
+      pendingExits: new Map(),
+    });
+
+    expect(plan.anchorDelta).toEqual({ x: 48, y: 36 });
+    expect(plan.moves).toHaveLength(1);
+    expect(getCompensatedMoveTranslate(currentRect, previousRect, plan.anchorDelta)).toEqual({
+      x: previousRect.x - currentRect.x + 48,
+      y: previousRect.y - currentRect.y + 36,
+    });
+  });
+
+  test("absolute-exit occupancy: sibling displacement after freeze appears as move (layout supplied via after)", () => {
+    // Contract 5: planner does not simulate layout; after snapshot must already
+    // reflect absolute freezes (flush scheme A: freeze then measure).
+    const exitingNode = { id: "exit" };
+    const sibling = { id: "sibling" };
+    const siblingBefore: Rect = { x: 0, y: 80, width: 100, height: 40 };
+    const siblingAfter: Rect = { x: 0, y: 20, width: 100, height: 40 };
+    const before = createSnapshot(batchParent, [
+      [exitingNode, { x: 0, y: 20, width: 100, height: 50 }],
+      [sibling, siblingBefore],
+    ]);
+    const after = createSnapshot(batchParent, [[sibling, siblingAfter]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [sibling],
+      pendingEnters: new Set(),
+      pendingExits: new Map([[exitingNode, createExit(exitingNode, { x: 0, y: 20, width: 100, height: 50 })]]),
+    });
+
+    expect(plan.exits.map((entry) => entry.node)).toEqual([exitingNode]);
+    expect(plan.moves).toEqual([
+      {
+        node: sibling,
+        previous: siblingBefore,
+        current: siblingAfter,
+        anchorDelta: { x: 0, y: 0 },
+      },
+    ]);
+  });
+
+  test("flow-exit occupancy: unchanged sibling rect yields no move when layout left them in place", () => {
+    // Contract 6: with flow exit the node still occupies space until final remove;
+    // if after rects are unchanged, planner must not invent moves.
+    const exitingNode = { id: "exit-flow" };
+    const sibling = { id: "sibling-flow" };
+    const siblingRect: Rect = { x: 0, y: 80, width: 100, height: 40 };
+    const before = createSnapshot(batchParent, [
+      [exitingNode, { x: 0, y: 20, width: 100, height: 50 }],
+      [sibling, siblingRect],
+    ]);
+    const after = createSnapshot(batchParent, [[sibling, siblingRect]]);
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: [sibling],
+      pendingEnters: new Set(),
+      pendingExits: new Map([[exitingNode, createExit(exitingNode, { x: 0, y: 20, width: 100, height: 50 })]]),
+    });
+
+    expect(plan.exits.map((entry) => entry.node)).toEqual([exitingNode]);
+    expect(plan.moves).toEqual([]);
+  });
+});
+
+describe("mutationLedger", () => {
+  type ExitMeta = { id: string };
+
+  test("schedules exit for nodes present before the batch", () => {
+    const ledger = createMutationLedger<string, ExitMeta>();
+    const result = noteElementRemove(ledger, "a", {
+      wasPresentBefore: true,
+      isAlreadyExiting: false,
+      createExitMeta: () => ({ id: "a" }),
+    });
+
+    expect(result).toEqual({ action: "schedule-exit", meta: { id: "a" } });
+    expect(ledger.pendingExits.get("a")).toEqual({ id: "a" });
+    expect(isLedgerEmpty(ledger)).toBe(false);
+  });
+
+  test("drops transient same-batch enter then remove", () => {
+    const ledger = createMutationLedger<string, ExitMeta>();
+    expect(noteElementInsert(ledger, "tmp", { wasPresentBefore: false })).toEqual({ action: "enter" });
+    const remove = noteElementRemove(ledger, "tmp", {
+      wasPresentBefore: false,
+      isAlreadyExiting: false,
+      createExitMeta: () => ({ id: "tmp" }),
+    });
+
+    expect(remove).toEqual({ action: "drop-transient-enter" });
+    expect(ledger.pendingEnters.has("tmp")).toBe(false);
+    expect(ledger.pendingExits.has("tmp")).toBe(false);
+  });
+
+  test("cancels exit on same-batch reinsert so planner sees a move, not enter/exit", () => {
+    const ledger = createMutationLedger<string, ExitMeta>();
+    noteElementRemove(ledger, "row", {
+      wasPresentBefore: true,
+      isAlreadyExiting: false,
+      createExitMeta: () => ({ id: "row" }),
+    });
+    const insert = noteElementInsert(ledger, "row", { wasPresentBefore: true });
+
+    expect(insert).toEqual({ action: "cancel-exit", meta: { id: "row" } });
+    expect(ledger.pendingExits.size).toBe(0);
+    expect(ledger.pendingEnters.has("row")).toBe(false);
+
+    const before = {
+      parent: { left: 0, top: 0, width: 300, height: 200 },
+      rects: new Map([["row", previousRect]]),
+    };
+    const after = {
+      parent: { left: 0, top: 0, width: 300, height: 200 },
+      rects: new Map([["row", currentRect]]),
+    };
+    const plan = planBatchAnimations({
+      before,
+      after,
+      finalNodes: ["row"],
+      pendingEnters: ledger.pendingEnters,
+      pendingExits: new Map(),
+    });
+
+    expect(plan.moves.map((entry) => entry.node)).toEqual(["row"]);
+    expect(plan.enters).toEqual([]);
+    expect(plan.exits).toEqual([]);
+  });
+
+  test("already-exiting removes are ignored without mutating the ledger", () => {
+    const ledger = createMutationLedger<string, ExitMeta>();
+    const result = noteElementRemove(ledger, "x", {
+      wasPresentBefore: true,
+      isAlreadyExiting: true,
+      createExitMeta: () => ({ id: "x" }),
+    });
+
+    expect(result).toEqual({ action: "already-exiting" });
+    expect(isLedgerEmpty(ledger)).toBe(true);
   });
 });
 

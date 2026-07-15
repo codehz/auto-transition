@@ -1,3 +1,40 @@
+/**
+ * DOM-free transition batch planner.
+ *
+ * Classifies enter / exit / move from before/after geometry snapshots and a
+ * mutation ledger. Layout measurement and style writes stay outside this module.
+ *
+ * ## Correctness contracts
+ *
+ * 1. **Move**: node in `before ∩ after` with significant rect change **or** parent
+ *    anchor shift → `moves`.
+ * 2. **Enter**: node in `after` only and listed in `pendingEnters` → `enters`.
+ * 3. **Exit**: entries remaining in `pendingExits` at flush → `exits`
+ *    (caller must cancel reinserts from the ledger before planning).
+ * 4. **Same-batch reinsert**: remove+insert of a node present in `before` cancels
+ *    the exit in the ledger; the node then follows the move path via (1).
+ * 5. **Absolute exit occupancy**: planner does not simulate layout. Absolute exits
+ *    must be freeze-committed before the `after` snapshot so sibling displacement
+ *    appears in `after.rects` and becomes moves.
+ * 6. **Flow exit**: exit nodes stay in normal flow until removal; sibling moves
+ *    only appear if real layout shifted them.
+ * 7. **Sub-pixel noise**: deltas ≤ {@link RECT_CHANGE_EPSILON} are ignored for move.
+ * 8. **Reduced motion**: not handled here — commit layer skips playback.
+ *
+ * ## Geometry
+ *
+ * Parent content-box origin may shift between snapshots (margin collapse, scroll,
+ * sibling layout outside the container, etc.). Compensation:
+ *
+ * ```
+ * anchorDelta = before.parent.leftTop - after.parent.leftTop
+ * moveInvertTranslate = (previous.xy - current.xy) + anchorDelta
+ * ```
+ *
+ * `flip()` and exit `translate()` apply the same `anchorDelta` so elements do not
+ * visually drift when only the measured parent origin moved.
+ */
+
 type Point = {
   x: number;
   y: number;
@@ -64,6 +101,21 @@ export function getBatchAnchorDelta(
   };
 }
 
+/**
+ * Invert translate used by move FLIP after parent-origin compensation.
+ * Matches `effects.flip()`: `(previous - current) + anchorDelta`.
+ */
+export function getCompensatedMoveTranslate(
+  current: Pick<Rect, "x" | "y">,
+  previous: Pick<Rect, "x" | "y">,
+  anchorDelta: Point,
+): Point {
+  return {
+    x: previous.x - current.x + anchorDelta.x,
+    y: previous.y - current.y + anchorDelta.y,
+  };
+}
+
 /** Sub-pixel threshold used to ignore browser layout noise. */
 export const RECT_CHANGE_EPSILON = 0.5;
 
@@ -80,6 +132,10 @@ export function hasRectChanged(current: Rect, previous: Rect, epsilon = RECT_CHA
   );
 }
 
+export function hasAnchorShift(anchorDelta: Point, epsilon = RECT_CHANGE_EPSILON): boolean {
+  return hasSignificantDelta(anchorDelta.x, 0, epsilon) || hasSignificantDelta(anchorDelta.y, 0, epsilon);
+}
+
 export function planBatchAnimations<T>({
   before,
   after,
@@ -94,7 +150,7 @@ export function planBatchAnimations<T>({
   pendingExits: ReadonlyMap<T, PendingExitRecord<T>>;
 }): BatchAnimationPlan<T> {
   const anchorDelta = getBatchAnchorDelta(before.parent, after.parent);
-  const hasAnchorShift = Math.abs(anchorDelta.x) > RECT_CHANGE_EPSILON || Math.abs(anchorDelta.y) > RECT_CHANGE_EPSILON;
+  const parentShifted = hasAnchorShift(anchorDelta);
   const moves: PlannedMove<T>[] = [];
   const enters: PlannedEnter<T>[] = [];
 
@@ -104,7 +160,7 @@ export function planBatchAnimations<T>({
 
     const previous = before.rects.get(node);
     if (previous) {
-      if (hasRectChanged(current, previous) || hasAnchorShift) {
+      if (hasRectChanged(current, previous) || parentShifted) {
         moves.push({ node, current, previous, anchorDelta });
       }
       continue;
