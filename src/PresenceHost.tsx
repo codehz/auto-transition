@@ -7,6 +7,13 @@ import { useCallback, type ComponentPropsWithRef, type DetailedHTMLProps, type H
 type PresenceRef = (target: HTMLElement) => () => void;
 
 /**
+ * SSR-safe base: `class extends HTMLElement` must not evaluate when
+ * `HTMLElement` is missing (Bun/Node server runtimes).
+ */
+const HTMLElementBase: typeof HTMLElement =
+  typeof HTMLElement === "function" ? HTMLElement : (class {} as unknown as typeof HTMLElement);
+
+/**
  * Custom Element that re-attaches a presence callback whenever the host is
  * connected / disconnected, or when the callback itself is replaced.
  *
@@ -14,7 +21,7 @@ type PresenceRef = (target: HTMLElement) => () => void;
  * reparenting). Bridging through connected/disconnected keeps the outer
  * callback-ref lifecycle honest: attach on connect, cleanup on disconnect.
  */
-class AutoPresenceElement extends HTMLElement {
+class AutoPresenceElement extends HTMLElementBase {
   #presenceRef?: PresenceRef;
   #cleanup?: () => void;
 
@@ -93,6 +100,6 @@ export function PresenceHost({ ref, ...props }: ComponentPropsWithRef<"section">
   );
 }
 
-if (typeof customElements === "object") {
+if (typeof customElements === "object" && typeof HTMLElement === "function") {
   customElements.define("auto-presence", AutoPresenceElement);
 }

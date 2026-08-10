@@ -1368,3 +1368,26 @@ describe("patchActivity", () => {
     }
   });
 });
+
+describe("PresenceHost SSR safety", () => {
+  // Runtime-selected subprocess: verifies module load without DOM globals.
+  test("module evaluates without DOM globals", async () => {
+    const proc = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `delete globalThis.HTMLElement; delete globalThis.customElements; const { PresenceHost } = await import(${JSON.stringify(new URL("./PresenceHost.tsx", import.meta.url).href)}); if (typeof PresenceHost !== "function") throw new Error("PresenceHost missing");`,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toBe("");
+  });
+});
