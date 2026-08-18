@@ -1369,7 +1369,7 @@ describe("patchActivity", () => {
   });
 });
 
-describe("PresenceHost SSR safety", () => {
+describe("PresenceHost registration", () => {
   // Runtime-selected subprocess: verifies module load without DOM globals.
   test("module evaluates without DOM globals", async () => {
     const proc = Bun.spawn({
@@ -1377,6 +1377,41 @@ describe("PresenceHost SSR safety", () => {
         "bun",
         "-e",
         `delete globalThis.HTMLElement; delete globalThis.customElements; const { PresenceHost } = await import(${JSON.stringify(new URL("./PresenceHost.tsx", import.meta.url).href)}); if (typeof PresenceHost !== "function") throw new Error("PresenceHost missing");`,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toBe("");
+  });
+
+  // Isolated subprocess: first-writer registration must survive a later import.
+  test("skips define when auto-presence is already registered", async () => {
+    const proc = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `class HTMLElement {}
+globalThis.HTMLElement = HTMLElement;
+const registry = new Map();
+globalThis.customElements = {
+  get(name) { return registry.get(name); },
+  define(name, ctor) {
+    if (registry.has(name)) throw new Error("already defined: " + name);
+    registry.set(name, ctor);
+  },
+};
+class Existing extends HTMLElement {}
+customElements.define("auto-presence", Existing);
+const { PresenceHost } = await import(${JSON.stringify(new URL("./PresenceHost.tsx", import.meta.url).href)});
+if (typeof PresenceHost !== "function") throw new Error("PresenceHost missing");
+if (customElements.get("auto-presence") !== Existing) throw new Error("existing registration was replaced");`,
       ],
       stdout: "pipe",
       stderr: "pipe",

@@ -100,6 +100,10 @@ export function PresenceHost({ ref, ...props }: ComponentPropsWithRef<"section">
   );
 }
 
-if (typeof customElements === "object" && typeof HTMLElement === "function") {
+if (
+  typeof customElements === "object" &&
+  typeof HTMLElement === "function" &&
+  customElements.get("auto-presence") == null
+) {
   customElements.define("auto-presence", AutoPresenceElement);
 }
