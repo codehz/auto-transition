@@ -137,7 +137,7 @@ function apply(node: HTMLElement, options: ActivityPatchOptions, controllers: We
   }
 
   const proxied = new Proxy(originalStyle, {
-    get(target, p, receiver) {
+    get(target, p) {
       if (p === "setProperty") {
         return function (this: CSSStyleDeclaration, property: string, value: string | null, priority?: string) {
           if (property === "display" && isHideDisplay(value)) {
@@ -164,7 +164,9 @@ function apply(node: HTMLElement, options: ActivityPatchOptions, controllers: We
         // Report the Activity-requested value even while we delay applying it.
         return "none";
       }
-      const value = Reflect.get(target, p, receiver);
+      // Native CSSStyleDeclaration accessors brand-check `this`. Passing the proxy
+      // as receiver throws (Illegal invocation) when reading cssText, color, etc.
+      const value = Reflect.get(target, p, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
     set(target, p, newValue) {

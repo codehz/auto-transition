@@ -1367,6 +1367,31 @@ describe("patchActivity", () => {
       restoreMocks();
     }
   });
+
+  test("reads native-branded style values without illegal invocation", () => {
+    installMocks();
+    try {
+      const child = asHTMLElement(createElementMock());
+      const parent = asHTMLElement(createElementMock());
+      (parent as unknown as { children: HTMLElement[] }).children = [child];
+
+      const style = child.style;
+      Object.defineProperty(style, "color", {
+        configurable: true,
+        get() {
+          if (this !== style) {
+            throw new TypeError("Illegal invocation");
+          }
+          return "red";
+        },
+      });
+
+      patchActivity(parent, { mode: "inert" });
+      expect(child.style.color).toBe("red");
+    } finally {
+      restoreMocks();
+    }
+  });
 });
 
 describe("PresenceHost registration", () => {
